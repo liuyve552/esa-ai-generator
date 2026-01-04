@@ -10,24 +10,35 @@ export default function SharePageClient() {
   const id = useMemo(() => (sp.get("id") ?? "").trim(), [sp]);
 
   const [data, setData] = useState<GenerateResponse | null>(null);
+  const [clientApiMs, setClientApiMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setData(null);
+    setClientApiMs(null);
     setError(null);
 
     if (!id) return;
 
     const ac = new AbortController();
 
-    fetch(`/api/view/${encodeURIComponent(id)}`, { method: "POST", cache: "no-store", signal: ac.signal }).catch(() => null);
+    fetch(`/api/view/${encodeURIComponent(id)}`, {
+      method: "POST",
+      cache: "no-store",
+      signal: ac.signal
+    }).catch(() => null);
+
+    const t0 = performance.now();
 
     fetch(`/api/share/${encodeURIComponent(id)}`, { cache: "no-store", signal: ac.signal })
       .then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         return (await res.json()) as GenerateResponse;
       })
-      .then((json) => setData(json))
+      .then((json) => {
+        setClientApiMs(Math.round(performance.now() - t0));
+        setData(json);
+      })
       .catch((e) => {
         if (ac.signal.aborted) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -53,9 +64,7 @@ export default function SharePageClient() {
       {error ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-sm text-red-100">{error}</div>
       ) : null}
-      {data ? <ResultView data={data} sharedId={id} /> : null}
+      {data ? <ResultView data={data} sharedId={id} clientApiMs={clientApiMs ?? undefined} /> : null}
     </>
   );
 }
-
-

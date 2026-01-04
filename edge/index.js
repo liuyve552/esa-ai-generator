@@ -2,6 +2,7 @@
 // Serves /api/* while static assets are served from ./out
 
 const DEFAULT_TTL_MS = 8 * 60 * 1000;
+const KV_NAMESPACE = "esa-ai-generator";
 
 function nowMs() {
   const p = globalThis?.performance;
@@ -47,6 +48,32 @@ function getMem() {
   return g.__EDGE_MEM_CACHE;
 }
 
+function getKv() {
+  try {
+    if (typeof EdgeKV === "undefined") return null;
+    return new EdgeKV({ namespace: KV_NAMESPACE });
+  } catch {
+    return null;
+  }
+}
+
+async function kvGetJson(kv, key) {
+  try {
+    const v = await kv.get(key, { type: "json" });
+    return v ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function kvPutJson(kv, key, obj) {
+  try {
+    await kv.put(key, JSON.stringify(obj));
+    return true;
+  } catch {
+    return false;
+  }
+}
 async function edgeCacheGet(keyUrl) {
   const cache = getCache();
   if (cache) {
@@ -100,40 +127,76 @@ async function sha256Base64Url(input) {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function shareKey(id) {
-  return `https://edge-cache.local/share/${encodeURIComponent(id)}`;
-}
+function shareKey(id) { return `share_${id}`; }
 
-function viewKey(id) {
-  return `https://edge-cache.local/views/${encodeURIComponent(id)}`;
-}
+function viewKey(id) { return `views_${id}`; }
 
 async function saveShare(payload, ttlMs) {
   const id = await sha256Base64Url(
     `${payload.lang}|${payload.prompt}|${payload.location.city || ""}|${payload.location.country || ""}|${payload.weather.weatherCode || ""}`
   );
 
-  const existing = await edgeCacheGet(shareKey(id));
+  const kv = getKv();
+  const now = Date.now();
+  const expiresAt = now + ttlMs;
+
+  if (kv) {
+    const existing = await kvGetJson(kv, shareKey(id));
+    const stillValid = existing && typeof existing.expiresAt === "number" && existing.expiresAt > now;
+    if (!stillValid) {
+      await kvPutJson(kv, shareKey(id), { expiresAt, payload });
+    }
+    return id;
+  }
+
+  const existing = await edgeCacheGet(`https://edge-cache.local/share/${encodeURIComponent(id)}`);
   if (!existing.hit) {
-    await edgeCachePut(shareKey(id), { payload }, ttlMs);
+    await edgeCachePut(`https://edge-cache.local/share/${encodeURIComponent(id)}`, { payload }, ttlMs);
   }
   return id;
 }
 
 async function getShare(id) {
-  const cached = await edgeCacheGet(shareKey(id));
+  const now = Date.now();
+  const kv = getKv();
+  if (kv) {
+    const v = await kvGetJson(kv, shareKey(id));
+    if (!v || typeof v.expiresAt !== "number" || v.expiresAt <= now) return null;
+    return v.payload ?? null;
+  }
+
+  const cached = await edgeCacheGet(`https://edge-cache.local/share/${encodeURIComponent(id)}`);
   return cached.hit && cached.value ? cached.value.payload : null;
 }
 
 async function getViewCount(id) {
-  const cached = await edgeCacheGet(viewKey(id));
+  const now = Date.now();
+  const kv = getKv();
+  if (kv) {
+    const v = await kvGetJson(kv, viewKey(id));
+    if (!v || typeof v.expiresAt !== "number" || v.expiresAt <= now) return 0;
+    return typeof v.count === "number" ? v.count : 0;
+  }
+
+  const cached = await edgeCacheGet(`https://edge-cache.local/views/${encodeURIComponent(id)}`);
   return cached.hit && cached.value ? cached.value.count : 0;
 }
 
 async function incrementView(id, ttlMs) {
+  const kv = getKv();
+  const now = Date.now();
+  const expiresAt = now + ttlMs;
+
+  if (kv) {
+    const current = await getViewCount(id);
+    const next = current + 1;
+    await kvPutJson(kv, viewKey(id), { expiresAt, count: next });
+    return next;
+  }
+
   const current = await getViewCount(id);
   const next = current + 1;
-  await edgeCachePut(viewKey(id), { count: next }, ttlMs);
+  await edgeCachePut(`https://edge-cache.local/views/${encodeURIComponent(id)}`, { count: next }, ttlMs);
   return next;
 }
 
@@ -528,6 +591,7 @@ export default {
     return routeFetch(request, env);
   }
 };
+
 
 
 

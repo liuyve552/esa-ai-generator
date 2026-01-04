@@ -12,10 +12,12 @@ export default function ResultPageClient() {
   const lang = useMemo(() => (sp.get("lang") ?? "en").trim() || "en", [sp]);
 
   const [data, setData] = useState<GenerateResponse | null>(null);
+  const [clientApiMs, setClientApiMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setData(null);
+    setClientApiMs(null);
     setError(null);
 
     if (!prompt) return;
@@ -25,12 +27,17 @@ export default function ResultPageClient() {
     url.searchParams.set("lang", lang);
 
     const ac = new AbortController();
+    const t0 = performance.now();
+
     fetch(url, { cache: "no-store", signal: ac.signal })
       .then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         return (await res.json()) as GenerateResponse;
       })
-      .then((json) => setData(json))
+      .then((json) => {
+        setClientApiMs(Math.round(performance.now() - t0));
+        setData(json);
+      })
       .catch((e) => {
         if (ac.signal.aborted) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -56,7 +63,7 @@ export default function ResultPageClient() {
       {error ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-sm text-red-100">{error}</div>
       ) : null}
-      {data ? <ResultView data={data} /> : null}
+      {data ? <ResultView data={data} clientApiMs={clientApiMs ?? undefined} /> : null}
     </>
   );
 }

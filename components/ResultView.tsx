@@ -13,7 +13,15 @@ function formatTemp(t: number | null | undefined) {
   return `${Math.round(t)}°C`;
 }
 
-export default function ResultView({ data, sharedId }: { data: GenerateResponse; sharedId?: string }) {
+export default function ResultView({
+  data,
+  sharedId,
+  clientApiMs
+}: {
+  data: GenerateResponse;
+  sharedId?: string;
+  clientApiMs?: number;
+}) {
   const [copied, setCopied] = useState(false);
 
   const shareUrl = useMemo(() => {
@@ -21,6 +29,11 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
     if (!id) return null;
     return `${globalThis.location?.origin ?? ""}/s/?id=${id}`;
   }, [data.share?.id, sharedId]);
+
+  const networkOverheadMs =
+    typeof clientApiMs === "number" ? Math.max(0, Math.round(clientApiMs - data.timing.totalMs)) : null;
+
+  const edgeEndToEndMs = typeof clientApiMs === "number" ? clientApiMs : data.timing.totalMs;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
@@ -38,8 +51,15 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
               {data.location.country ?? "Unknown"} · {formatTemp(data.weather.temperatureC)} · {data.weather.description}
             </h2>
             <p className="text-xs text-white/60">
-              {data.edge.provider} · {data.edge.node} · {data.timing.totalMs}ms · {data.cache.hit ? "cache hit" : "cache miss"} ·
-              est RTT {"<"}50ms (sim)
+              {data.edge.provider} · {data.edge.node} · cache {data.cache.hit ? "hit" : "miss"} · ttl {Math.round(data.cache.ttlMs / 60000)}m
+            </p>
+            <p className="text-xs text-white/60">
+              Edge compute {data.timing.totalMs}ms (geo {data.timing.geoMs}ms · weather {data.timing.weatherMs}ms · ai {data.timing.aiMs}ms)
+              {typeof clientApiMs === "number" ? ` · API round-trip ${clientApiMs}ms` : ""}
+              {networkOverheadMs != null ? ` · net/overhead ~${networkOverheadMs}ms` : ""}
+            </p>
+            <p className="text-[11px] text-white/45">
+              Tip: repeat the same prompt within 5–10 minutes to see cache hits and much lower end-to-end latency.
             </p>
           </div>
 
@@ -81,7 +101,7 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
         </div>
 
         <div className="mt-6">
-          <LatencyChart edgeMs={data.timing.totalMs} originSimulatedMs={data.timing.originSimulatedMs} />
+          <LatencyChart edgeMs={edgeEndToEndMs} originSimulatedMs={data.timing.originSimulatedMs} />
         </div>
       </motion.section>
 
@@ -104,12 +124,10 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
           <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
             <div className="text-xs text-white/60">Share / View count demo</div>
             <div className="mt-1 text-sm text-white/90">{data.share?.views != null ? `Views: ${data.share.views}` : "Views: N/A"}</div>
+            <div className="mt-1 text-[11px] text-white/45">Note: share storage may expire or evict without KV; enable ESA KV for stability.</div>
           </div>
         </div>
       </motion.aside>
     </div>
   );
 }
-
-
-
