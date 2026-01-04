@@ -334,15 +334,26 @@ async function cacheKeyFor({ prompt, lang, location }) {
   return `https://edge-cache.local/gen/${b64}`;
 }
 
-function envGet(name) {
+function envGet(env, name) {
   try {
-    return process?.env?.[name] || "";
+    const v = env?.[name];
+    if (typeof v === "string" && v) return v;
+    if (v != null) return String(v);
   } catch {
-    return "";
+    // ignore
   }
+
+  try {
+    const pv = globalThis?.process?.env?.[name];
+    if (typeof pv === "string") return pv;
+  } catch {
+    // ignore
+  }
+
+  return "";
 }
 
-async function handleGenerate(request) {
+async function handleGenerate(request, env) {
   const url = new URL(request.url);
   let prompt = (url.searchParams.get("prompt") || "").trim();
   let lang = (url.searchParams.get("lang") || "en").trim() || "en";
@@ -385,8 +396,8 @@ async function handleGenerate(request) {
   const weatherMs = Math.round(performance.now() - weatherStart);
 
   const aiStart = performance.now();
-  const apiKey = envGet("DASHSCOPE_API_KEY");
-  const model = envGet("AI_TEXT_MODEL") || "qwen-max";
+  const apiKey = envGet(env, "DASHSCOPE_API_KEY");
+  const model = envGet(env, "AI_TEXT_MODEL") || "qwen-max";
 
   let contentText;
   let mode = "mock";
@@ -486,24 +497,30 @@ function notFound() {
   return json({ error: "Not found" }, { status: 404 });
 }
 
-addEventListener("fetch", (event) => {
-  event.respondWith(
-    (async () => {
-      const req = event.request;
-      const url = new URL(req.url);
+async function routeFetch(request, env) {
+  const url = new URL(request.url);
 
-      if (!url.pathname.startsWith("/api/")) return notFound();
+  // If ESA ever routes non-API requests here, only handle /api/*.
+  if (!url.pathname.startsWith("/api/")) {
+    return json({ error: "Not found" }, { status: 404 });
+  }
 
-      if (url.pathname === "/api/generate") return handleGenerate(req);
-      if (url.pathname === "/api/share") return handleShare(req);
+  if (url.pathname === "/api/generate") return handleGenerate(request, env);
+  if (url.pathname === "/api/share") return handleShare(request);
 
-      const parts = url.pathname.split("/").filter(Boolean);
-      if (parts[1] === "share" && parts.length === 3 && req.method === "GET") return handleShareById(parts[2]);
-      if (parts[1] === "view" && parts.length === 3 && (req.method === "GET" || req.method === "POST")) return handleViews(parts[2], req);
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts[1] === "share" && parts.length === 3 && request.method === "GET") return handleShareById(parts[2]);
+  if (parts[1] === "view" && parts.length === 3 && (request.method === "GET" || request.method === "POST")) {
+    return handleViews(parts[2], request);
+  }
 
-      return notFound();
-    })()
-  );
-});
+  return json({ error: "Not found" }, { status: 404 });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    return routeFetch(request, env);
+  }
+};
 
 
