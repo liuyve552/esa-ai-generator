@@ -3,6 +3,12 @@
 
 const DEFAULT_TTL_MS = 8 * 60 * 1000;
 
+function nowMs() {
+  const p = globalThis?.performance;
+  if (p && typeof p.now === 'function') return p.now();
+  return Date.now();
+}
+
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("Content-Type", "application/json; charset=utf-8");
@@ -366,12 +372,12 @@ async function handleGenerate(request, env) {
 
   if (!prompt) return json({ error: "Missing prompt" }, { status: 400 });
 
-  const started = performance.now();
+  const started = nowMs();
   const edge = getEdgeInfo(request.headers);
 
-  const geoStart = performance.now();
+  const geoStart = nowMs();
   const location = await detectLocation(request);
-  const geoMs = Math.round(performance.now() - geoStart);
+  const geoMs = Math.round(nowMs() - geoStart);
 
   const locLabel = `${location.city || "unknown"}-${location.country || "unknown"}-${(location.latitude || 0).toFixed(2)}-${(location.longitude || 0).toFixed(2)}`;
   const key = await cacheKeyFor({ prompt, lang, location: locLabel });
@@ -384,18 +390,18 @@ async function handleGenerate(request, env) {
       ...cached.value,
       cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
       share: { id: shareId, url: `/s/?id=${shareId}`, views },
-      timing: { ...cached.value.timing, totalMs: Math.round(performance.now() - started), geoMs }
+      timing: { ...cached.value.timing, totalMs: Math.round(nowMs() - started), geoMs }
     });
   }
 
-  const weatherStart = performance.now();
+  const weatherStart = nowMs();
   const weather =
     location.latitude != null && location.longitude != null
       ? await getWeather(location.latitude, location.longitude)
       : { temperatureC: null, weatherCode: null, description: "Unknown" };
-  const weatherMs = Math.round(performance.now() - weatherStart);
+  const weatherMs = Math.round(nowMs() - weatherStart);
 
-  const aiStart = performance.now();
+  const aiStart = nowMs();
   const apiKey = envGet(env, "DASHSCOPE_API_KEY");
   const model = envGet(env, "AI_TEXT_MODEL") || "qwen-max";
 
@@ -425,7 +431,7 @@ async function handleGenerate(request, env) {
     contentText = mockGenerate({ prompt, location, weather, lang });
   }
 
-  const aiMs = Math.round(performance.now() - aiStart);
+  const aiMs = Math.round(nowMs() - aiStart);
 
   const result = {
     prompt,
@@ -437,7 +443,7 @@ async function handleGenerate(request, env) {
     content: { text: contentText, model: usedModel, mode },
     share: { id: null, url: null, views: null },
     timing: {
-      totalMs: Math.round(performance.now() - started),
+      totalMs: Math.round(nowMs() - started),
       geoMs,
       weatherMs,
       aiMs,
@@ -522,5 +528,6 @@ export default {
     return routeFetch(request, env);
   }
 };
+
 
 
