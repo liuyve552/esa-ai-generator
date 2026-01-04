@@ -316,10 +316,11 @@ async function generateWithQwen({ apiKey, model, messages }) {
   return { text: choiceText.trim(), model };
 }
 
-function simulateOriginMs() {
-  const base = 260;
-  const jitter = Math.floor(Math.random() * 220);
-  return base + jitter;
+function simulateOriginMs(edgeComputeMs, cacheHit) {
+  // Centralized region typically adds extra WAN RTT; cache hits reduce compute but still pay network.
+  const extraBase = cacheHit ? 350 : 650;
+  const extraJitter = cacheHit ? 250 : 650;
+  return edgeComputeMs + extraBase + Math.floor(Math.random() * extraJitter);
 }
 
 function buildSystemPrompt(lang) {
@@ -453,7 +454,13 @@ async function handleGenerate(request, env) {
       ...cached.value,
       cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
       share: { id: shareId, url: `/s/?id=${shareId}`, views },
-      timing: { ...cached.value.timing, totalMs: Math.round(nowMs() - started), geoMs }
+      timing: {
+        totalMs: Math.round(nowMs() - started),
+        geoMs,
+        weatherMs: 0,
+        aiMs: 0,
+        originSimulatedMs: simulateOriginMs(Math.round(nowMs() - started), true)
+      }
     });
   }
 
@@ -510,7 +517,7 @@ async function handleGenerate(request, env) {
       geoMs,
       weatherMs,
       aiMs,
-      originSimulatedMs: simulateOriginMs()
+      originSimulatedMs: simulateOriginMs(Math.round(nowMs() - started), false)
     },
     generatedAt: new Date().toISOString()
   };
@@ -591,6 +598,7 @@ export default {
     return routeFetch(request, env);
   }
 };
+
 
 
 
