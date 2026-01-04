@@ -1,0 +1,61 @@
+"use client";
+
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from "react-leaflet";
+import type { LatLngExpression } from "leaflet";
+import L from "leaflet";
+import { useMemo } from "react";
+
+const userIcon = L.divIcon({
+  className: "user-pin",
+  html:
+    '<div style="width:14px;height:14px;border-radius:999px;background:#7c3aed;box-shadow:0 0 0 4px rgba(124,58,237,0.25)"></div>'
+});
+
+const edgeIcon = L.divIcon({
+  className: "edge-pin",
+  html:
+    '<div style="width:10px;height:10px;border-radius:999px;background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,0.18)"></div>'
+});
+
+export default function WorldMap({
+  latitude,
+  longitude,
+  city
+}: {
+  latitude: number;
+  longitude: number;
+  city?: string;
+}) {
+  const center = useMemo<LatLngExpression>(() => [latitude, longitude], [latitude, longitude]);
+
+  const edgeNodes = useMemo(
+    () =>
+      [
+        { name: "Tokyo", lat: 35.6762, lon: 139.6503 },
+        { name: "Singapore", lat: 1.3521, lon: 103.8198 },
+        { name: "Frankfurt", lat: 50.1109, lon: 8.6821 },
+        { name: "Virginia", lat: 37.4316, lon: -78.6569 },
+        { name: "San Francisco", lat: 37.7749, lon: -122.4194 }
+      ] as const,
+    []
+  );
+
+  return (
+    <MapContainer center={center} zoom={2} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
+      <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+      <Marker position={center} icon={userIcon}>
+        <Popup>{city ? `You are near ${city}` : "Your location"}</Popup>
+      </Marker>
+
+      <CircleMarker center={center} radius={18} pathOptions={{ color: "#7c3aed", weight: 1, opacity: 0.35 }} />
+
+      {edgeNodes.map((n) => (
+        <Marker key={n.name} position={[n.lat, n.lon]} icon={edgeIcon}>
+          <Popup>Edge node (sim): {n.name}</Popup>
+        </Marker>
+      ))}
+    </MapContainer>
+  );
+}
+

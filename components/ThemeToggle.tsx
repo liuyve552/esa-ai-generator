@@ -1,0 +1,41 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Theme = "dark" | "light";
+
+function getInitialTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  const stored = window.localStorage.getItem("theme");
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+}
+
+export default function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>("dark");
+
+  useEffect(() => {
+    setTheme(getInitialTheme());
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove("dark", "light");
+    root.classList.add(theme);
+    root.dataset.theme = theme;
+    window.localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const label = useMemo(() => (theme === "dark" ? "Dark" : "Light"), [theme]);
+
+  return (
+    <button
+      className="h-9 rounded-xl border border-white/15 bg-white/5 px-3 text-xs text-white/85 backdrop-blur hover:bg-white/10"
+      onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+      aria-label="Toggle theme"
+    >
+      {label}
+    </button>
+  );
+}
+
