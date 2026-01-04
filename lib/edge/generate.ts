@@ -37,7 +37,7 @@ async function cacheKeyFor({
   const bytes = new Uint8Array(digest);
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
-  const b64 = btoa(bin).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+  const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   return `https://edge-cache.local/gen/${b64}`;
 }
 

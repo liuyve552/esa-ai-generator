@@ -9,7 +9,7 @@ import LatencyChart from "@/components/LatencyChart";
 const WorldMap = dynamic(() => import("@/components/WorldMap"), { ssr: false });
 
 function formatTemp(t: number | null | undefined) {
-  if (typeof t !== "number" || Number.isNaN(t)) return "—";
+  if (typeof t !== "number" || Number.isNaN(t)) return "N/A";
   return `${Math.round(t)}°C`;
 }
 
@@ -38,8 +38,8 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
               {data.location.country ?? "Unknown"} · {formatTemp(data.weather.temperatureC)} · {data.weather.description}
             </h2>
             <p className="text-xs text-white/60">
-              {data.edge.provider} · {data.edge.node} · {data.timing.totalMs}ms{" "}
-              {data.cache.hit ? "· cache hit" : "· cache miss"} · est RTT <50ms (sim)
+              {data.edge.provider} · {data.edge.node} · {data.timing.totalMs}ms · {data.cache.hit ? "cache hit" : "cache miss"} ·
+              est RTT {"<"}50ms (sim)
             </p>
           </div>
 
@@ -92,26 +92,18 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
         className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-glow"
       >
         <div className="h-[360px] overflow-hidden rounded-2xl border border-white/10 bg-black/25">
-          <WorldMap
-            latitude={data.location.latitude ?? 0}
-            longitude={data.location.longitude ?? 0}
-            city={data.location.city ?? undefined}
-          />
+          <WorldMap latitude={data.location.latitude ?? 0} longitude={data.location.longitude ?? 0} city={data.location.city ?? undefined} />
         </div>
 
         <div className="mt-4 grid gap-3">
           <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
-            <div className="text-xs text-white/60">Edge cache (5–10min)</div>
-            <div className="mt-1 text-sm text-white/90">
-              Keyed by prompt+lang+location. Hit reduces weather/AI calls.
-            </div>
+            <div className="text-xs text-white/60">Edge cache (5–10 min)</div>
+            <div className="mt-1 text-sm text-white/90">Keyed by prompt+lang+location. Hit reduces weather/AI calls.</div>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
             <div className="text-xs text-white/60">Share / View count demo</div>
-            <div className="mt-1 text-sm text-white/90">
-              {data.share?.views != null ? `Views: ${data.share.views}` : "Views: —"}
-            </div>
+            <div className="mt-1 text-sm text-white/90">{data.share?.views != null ? `Views: ${data.share.views}` : "Views: N/A"}</div>
           </div>
         </div>
       </motion.aside>

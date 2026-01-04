@@ -20,9 +20,7 @@ export default function HomePage() {
         <header className="flex items-center justify-between">
           <div className="space-y-1">
             <p className="text-xs tracking-widest text-white/60">ESA PAGES EDGE</p>
-            <h1 className="text-balance text-2xl font-semibold leading-tight md:text-3xl">
-              Global Edge AI Personalizer
-            </h1>
+            <h1 className="text-balance text-2xl font-semibold leading-tight md:text-3xl">Global Edge AI Personalizer</h1>
           </div>
           <ThemeToggle />
         </header>
@@ -32,10 +30,9 @@ export default function HomePage() {
         </section>
 
         <footer className="mt-10 text-xs text-white/50">
-          Edge-only pipeline: Geo → Weather → AI → Cache (5–10min). No key? It auto-falls back to mock.
+          Edge-only pipeline: Geo → Weather → AI → Cache (5–10 min). No key? It auto-falls back to mock.
         </footer>
       </div>
     </main>
   );
 }
-
