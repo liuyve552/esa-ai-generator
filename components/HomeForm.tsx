@@ -73,7 +73,7 @@ export default function HomeForm() {
           </select>
 
           <button
-            onClick={() => router.push(`/result?prompt=${encodeURIComponent(prompt)}&lang=${encodeURIComponent(effectiveLang)}`)}
+            onClick={() => router.push(`/result/?prompt=${encodeURIComponent(prompt)}&lang=${encodeURIComponent(effectiveLang)}`)}
             disabled={!prompt.trim()}
             className="mt-2 h-[46px] w-full rounded-2xl bg-white px-4 text-sm font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/30 disabled:text-black/60"
           >

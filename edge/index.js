@@ -372,7 +372,7 @@ async function handleGenerate(request) {
     return json({
       ...cached.value,
       cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
-      share: { id: shareId, url: `/s?id=${shareId}`, views },
+      share: { id: shareId, url: `/s/?id=${shareId}`, views },
       timing: { ...cached.value.timing, totalMs: Math.round(performance.now() - started), geoMs }
     });
   }
@@ -439,7 +439,7 @@ async function handleGenerate(request) {
 
   const shareId = await saveShare(result, DEFAULT_TTL_MS);
   const views = await getViewCount(shareId);
-  const final = { ...result, share: { id: shareId, url: `/s?id=${shareId}`, views } };
+  const final = { ...result, share: { id: shareId, url: `/s/?id=${shareId}`, views } };
 
   await edgeCachePut(key, final, DEFAULT_TTL_MS);
   return json(final);
@@ -452,7 +452,7 @@ async function handleShare(request) {
     const payload = await request.json().catch(() => null);
     if (!payload) return json({ error: "Missing payload" }, { status: 400 });
     const id = await saveShare(payload, 10 * 60 * 1000);
-    return json({ id, url: `/s?id=${id}` });
+    return json({ id, url: `/s/?id=${id}` });
   }
 
   const id = (url.searchParams.get("id") || "").trim();
@@ -505,3 +505,5 @@ addEventListener("fetch", (event) => {
     })()
   );
 });
+
+

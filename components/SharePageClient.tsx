@@ -40,7 +40,7 @@ export default function SharePageClient() {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-glow">
         <h2 className="text-lg font-semibold">Missing share id</h2>
-        <p className="mt-2 text-sm text-white/70">This link should look like /s?id=YOUR_ID</p>
+        <p className="mt-2 text-sm text-white/70">This link should look like /s/?id=YOUR_ID</p>
         <a className="mt-4 inline-flex rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black" href="/">
           Back to home
         </a>
@@ -57,3 +57,5 @@ export default function SharePageClient() {
     </>
   );
 }
+
+

@@ -19,7 +19,7 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
   const shareUrl = useMemo(() => {
     const id = sharedId ?? data.share?.id;
     if (!id) return null;
-    return `${globalThis.location?.origin ?? ""}/s?id=${id}`;
+    return `${globalThis.location?.origin ?? ""}/s/?id=${id}`;
   }, [data.share?.id, sharedId]);
 
   return (
@@ -110,4 +110,6 @@ export default function ResultView({ data, sharedId }: { data: GenerateResponse;
     </div>
   );
 }
+
+
 
