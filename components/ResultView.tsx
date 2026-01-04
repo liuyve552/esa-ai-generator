@@ -51,7 +51,7 @@ export default function ResultView({
               {data.location.country ?? "Unknown"} · {formatTemp(data.weather.temperatureC)} · {data.weather.description}
             </h2>
             <p className="text-xs text-white/60">
-              {data.edge.provider} · {data.edge.node} · cache {data.cache.hit ? "hit" : "miss"} · ttl {Math.round(data.cache.ttlMs / 60000)}m
+              {data.edge.provider} · {data.edge.node} · cache {data.cache.hit ? "hit" : "miss"} · ttl {Math.round(data.cache.ttlMs / 60000)}m · geo {data.location.source}
             </p>
             <p className="text-xs text-white/60">
               Edge compute {data.timing.totalMs}ms (geo {data.timing.geoMs}ms · weather {data.timing.weatherMs}ms · ai {data.timing.aiMs}ms)
@@ -131,3 +131,4 @@ export default function ResultView({
     </div>
   );
 }
+
