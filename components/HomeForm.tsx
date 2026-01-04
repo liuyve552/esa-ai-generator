@@ -15,17 +15,24 @@ const LANGS = [
   { value: "fr", labelKey: "lang.fr" }
 ] as const;
 
-export default function HomeForm({ initialLang }: { initialLang: string }) {
+export default function HomeForm() {
   const router = useRouter();
   const { t, i18n } = useTranslation();
 
   const [prompt, setPrompt] = useState<string>("");
   const [lang, setLang] = useState<string>("auto");
 
-  const effectiveLang = useMemo(() => (lang === "auto" ? initialLang : lang), [lang, initialLang]);
+  const autoLang = useMemo(() => {
+    const v = (i18n.resolvedLanguage ?? i18n.language ?? "en").toLowerCase();
+    return v.split("-")[0] ?? "en";
+  }, [i18n.language, i18n.resolvedLanguage]);
+
+  const effectiveLang = useMemo(() => (lang === "auto" ? autoLang : lang), [lang, autoLang]);
 
   useEffect(() => {
-    void i18n.changeLanguage(effectiveLang);
+    if (effectiveLang && i18n.language !== effectiveLang) {
+      void i18n.changeLanguage(effectiveLang);
+    }
   }, [effectiveLang, i18n]);
 
   return (
@@ -66,11 +73,7 @@ export default function HomeForm({ initialLang }: { initialLang: string }) {
           </select>
 
           <button
-            onClick={() =>
-              router.push(
-                `/result?prompt=${encodeURIComponent(prompt)}&lang=${encodeURIComponent(effectiveLang)}`
-              )
-            }
+            onClick={() => router.push(`/result?prompt=${encodeURIComponent(prompt)}&lang=${encodeURIComponent(effectiveLang)}`)}
             disabled={!prompt.trim()}
             className="mt-2 h-[46px] w-full rounded-2xl bg-white px-4 text-sm font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:bg-white/30 disabled:text-black/60"
           >

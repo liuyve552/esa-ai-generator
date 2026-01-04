@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import ParticlesBackdrop from "@/components/ParticlesBackdrop";
-import ResultPageClient from "@/components/ResultPageClient";
+import SharePageClient from "@/components/SharePageClient";
 
 function LoadingCard() {
   return (
@@ -15,13 +15,13 @@ function LoadingCard() {
   );
 }
 
-export default function ResultPage() {
+export default function SharePage() {
   return (
     <main className="relative min-h-screen overflow-hidden">
       <ParticlesBackdrop />
       <div className="mx-auto w-full max-w-6xl px-6 py-10">
         <Suspense fallback={<LoadingCard />}>
-          <ResultPageClient />
+          <SharePageClient />
         </Suspense>
       </div>
     </main>

@@ -1,17 +1,8 @@
-import { headers } from "next/headers";
 import HomeForm from "@/components/HomeForm";
 import ParticlesBackdrop from "@/components/ParticlesBackdrop";
 import ThemeToggle from "@/components/ThemeToggle";
-import { pickBestLang } from "@/lib/i18n/lang";
-
-export const runtime = "edge";
-export const dynamic = "force-dynamic";
 
 export default function HomePage() {
-  const h = headers();
-  const acceptLanguage = h.get("accept-language") ?? "";
-  const initialLang = pickBestLang(acceptLanguage);
-
   return (
     <main className="relative min-h-screen overflow-hidden">
       <ParticlesBackdrop />
@@ -26,7 +17,7 @@ export default function HomePage() {
         </header>
 
         <section className="mt-10 flex flex-1 flex-col justify-center">
-          <HomeForm initialLang={initialLang} />
+          <HomeForm />
         </section>
 
         <footer className="mt-10 text-xs text-white/50">

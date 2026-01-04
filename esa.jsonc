@@ -1,7 +1,11 @@
 {
-  // ESA Pages build config for Next.js
+  // ESA Functions + Pages config
+  // NOTE: ESA currently supports Next.js in static export mode (out/).
+  "name": "esa-ai-generator",
+  "installCommand": "npm install",
   "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "framework": "nextjs"
+  "assets": {
+    "directory": "./out"
+  },
+  "entry": "./edge/index.js"
 }
-
