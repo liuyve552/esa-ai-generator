@@ -8,11 +8,15 @@ body {
 }
 
 body {
-  @apply bg-black text-white antialiased;
+  @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-black dark:text-white;
 }
 
-html.light body {
-  @apply bg-white text-black;
+html.dark {
+  color-scheme: dark;
+}
+
+html.light {
+  color-scheme: light;
 }
 
 .leaflet-container {
@@ -20,4 +24,3 @@ html.light body {
   height: 100%;
   border-radius: 1rem;
 }
-

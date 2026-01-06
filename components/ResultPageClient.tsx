@@ -48,10 +48,10 @@ export default function ResultPageClient() {
 
   if (!prompt) {
     return (
-      <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-glow">
+      <div className="rounded-3xl border border-black/10 bg-white/70 p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.06),0_20px_60px_rgba(0,0,0,0.12)] dark:border-white/10 dark:bg-white/5 dark:shadow-glow">
         <h2 className="text-lg font-semibold">Missing prompt</h2>
-        <p className="mt-2 text-sm text-white/70">Go back to the home page and enter a prompt to generate.</p>
-        <a className="mt-4 inline-flex rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black" href="/">
+        <p className="mt-2 text-sm text-black/70 dark:text-white/70">Go back to the home page and enter a prompt to generate.</p>
+        <a className="mt-4 inline-flex rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90" href="/">
           Back to home
         </a>
       </div>
