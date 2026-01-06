@@ -1,6 +1,6 @@
 import type { GenerateResponse } from "@/lib/edge/types";
 import { detectLocation } from "@/lib/edge/geo";
-import { getWeather } from "@/lib/edge/weather";
+import { describeWeather, getWeather } from "@/lib/edge/weather";
 import { edgeCacheGet, edgeCachePut } from "@/lib/edge/cache";
 import { generateWithQwen } from "@/lib/edge/qwen";
 import { getViewCount, saveShare } from "@/lib/edge/share";
@@ -83,8 +83,8 @@ export async function generatePersonalized({
   const weatherStart = performance.now();
   const weather =
     location.latitude != null && location.longitude != null
-      ? await getWeather(location.latitude, location.longitude)
-      : { temperatureC: null, weatherCode: null, description: "Unknown" };
+      ? await getWeather(location.latitude, location.longitude, lang)
+      : { temperatureC: null, weatherCode: null, description: describeWeather(null, lang) };
   const weatherMs = Math.round(performance.now() - weatherStart);
 
   const aiStart = performance.now();

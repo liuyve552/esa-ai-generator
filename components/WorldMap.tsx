@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from "react-leaf
 import type { LatLngExpression } from "leaflet";
 import L from "leaflet";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 const userIcon = L.divIcon({
   className: "user-pin",
@@ -26,6 +27,7 @@ export default function WorldMap({
   longitude: number;
   city?: string;
 }) {
+  const { t } = useTranslation();
   const center = useMemo<LatLngExpression>(() => [latitude, longitude], [latitude, longitude]);
 
   const edgeNodes = useMemo(
@@ -45,17 +47,16 @@ export default function WorldMap({
       <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
       <Marker position={center} icon={userIcon}>
-        <Popup>{city ? `You are near ${city}` : "Your location"}</Popup>
+        <Popup>{city ? t("map.youAreNear", { city }) : t("map.yourLocation")}</Popup>
       </Marker>
 
       <CircleMarker center={center} radius={18} pathOptions={{ color: "#7c3aed", weight: 1, opacity: 0.35 }} />
 
       {edgeNodes.map((n) => (
         <Marker key={n.name} position={[n.lat, n.lon]} icon={edgeIcon}>
-          <Popup>Edge node (sim): {n.name}</Popup>
+          <Popup>{t("map.edgeNode", { name: n.name })}</Popup>
         </Marker>
       ))}
     </MapContainer>
   );
 }
-

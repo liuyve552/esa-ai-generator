@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslation } from "react-i18next";
 import ResultView from "@/components/ResultView";
 import type { GenerateResponse } from "@/lib/edge/types";
 
 export default function ResultPageClient() {
   const sp = useSearchParams();
+  const { t, i18n } = useTranslation();
 
   const prompt = useMemo(() => (sp.get("prompt") ?? "").trim(), [sp]);
   const lang = useMemo(() => (sp.get("lang") ?? "en").trim() || "en", [sp]);
@@ -14,6 +16,16 @@ export default function ResultPageClient() {
   const [data, setData] = useState<GenerateResponse | null>(null);
   const [clientApiMs, setClientApiMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!lang) return;
+    if (i18n.language !== lang) void i18n.changeLanguage(lang);
+  }, [i18n, lang]);
+
+  useEffect(() => {
+    if (!data?.lang) return;
+    if (i18n.language !== data.lang) void i18n.changeLanguage(data.lang);
+  }, [data?.lang, i18n]);
 
   useEffect(() => {
     setData(null);
@@ -49,10 +61,10 @@ export default function ResultPageClient() {
   if (!prompt) {
     return (
       <div className="rounded-3xl border border-black/10 bg-white/70 p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.06),0_20px_60px_rgba(0,0,0,0.12)] dark:border-white/10 dark:bg-white/5 dark:shadow-glow">
-        <h2 className="text-lg font-semibold">Missing prompt</h2>
-        <p className="mt-2 text-sm text-black/70 dark:text-white/70">Go back to the home page and enter a prompt to generate.</p>
+        <h2 className="text-lg font-semibold">{t("errors.missingPrompt.title")}</h2>
+        <p className="mt-2 text-sm text-black/70 dark:text-white/70">{t("errors.missingPrompt.desc")}</p>
         <a className="mt-4 inline-flex rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90" href="/">
-          Back to home
+          {t("actions.backHome")}
         </a>
       </div>
     );

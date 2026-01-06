@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslation } from "react-i18next";
 import ResultView from "@/components/ResultView";
 import type { GenerateResponse } from "@/lib/edge/types";
 
 export default function SharePageClient() {
   const sp = useSearchParams();
+  const { t, i18n } = useTranslation();
   const id = useMemo(() => (sp.get("id") ?? "").trim(), [sp]);
   const d = useMemo(() => (sp.get("d") ?? "").trim(), [sp]);
 
@@ -54,7 +56,7 @@ export default function SharePageClient() {
       }
 
       // Fallback: replay from embedded share snapshot.
-      if (!d) throw new Error("Missing embedded share payload");
+      if (!d) throw new Error(t("errors.missingSharePayload"));
 
       const res = await fetch(`/api/replay?d=${encodeURIComponent(d)}`, { cache: "no-store", signal: ac.signal });
       if (!res.ok) throw new Error(await res.text());
@@ -74,13 +76,18 @@ export default function SharePageClient() {
     return () => ac.abort();
   }, [id, d]);
 
+  useEffect(() => {
+    if (!data?.lang) return;
+    if (i18n.language !== data.lang) void i18n.changeLanguage(data.lang);
+  }, [data?.lang, i18n]);
+
   if (!id && !d) {
     return (
       <div className="rounded-2xl border border-black/10 bg-white/70 p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.06),0_20px_60px_rgba(0,0,0,0.12)] dark:border-white/10 dark:bg-white/5 dark:shadow-glow">
-        <h2 className="text-lg font-semibold">Missing share id</h2>
-        <p className="mt-2 text-sm text-black/70 dark:text-white/70">This link should look like /s/?id=YOUR_ID</p>
+        <h2 className="text-lg font-semibold">{t("errors.missingShareId.title")}</h2>
+        <p className="mt-2 text-sm text-black/70 dark:text-white/70">{t("errors.missingShareId.desc")}</p>
         <a className="mt-4 inline-flex rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90" href="/">
-          Back to home
+          {t("actions.backHome")}
         </a>
       </div>
     );

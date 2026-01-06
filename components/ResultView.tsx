@@ -3,15 +3,11 @@
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { GenerateResponse } from "@/lib/edge/types";
 import LatencyChart from "@/components/LatencyChart";
 
 const WorldMap = dynamic(() => import("@/components/WorldMap"), { ssr: false });
-
-function formatTemp(t: number | null | undefined) {
-  if (typeof t !== "number" || Number.isNaN(t)) return "N/A";
-  return `${Math.round(t)}°C`;
-}
 
 export default function ResultView({
   data,
@@ -22,7 +18,22 @@ export default function ResultView({
   sharedId?: string;
   clientApiMs?: number;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+
+  const formatTemp = (value: number | null | undefined) => {
+    if (typeof value !== "number" || Number.isNaN(value)) return t("common.na");
+    return `${Math.round(value)}°C`;
+  };
+
+  const place =
+    [data.location.city, data.location.country].filter((v): v is string => typeof v === "string" && v.length > 0).join(", ") ||
+    t("common.unknown");
+
+  const geoSourceLabel = t(`geoSource.${data.location.source}`, { defaultValue: data.location.source });
+  const cacheLabel = data.cache.hit ? t("result.cache.hit") : t("result.cache.miss");
+  const ttlMinutes = Math.round(data.cache.ttlMs / 60000);
+  const modeLabel = t(`result.mode.${data.content.mode}`, { defaultValue: data.content.mode });
 
   const shareUrl = useMemo(() => {
     const origin = globalThis.location?.origin ?? "";
@@ -38,6 +49,20 @@ export default function ResultView({
 
   const edgeEndToEndMs = typeof clientApiMs === "number" ? clientApiMs : data.timing.totalMs;
 
+  const metricsParts = [
+    t("result.metrics", {
+      total: data.timing.totalMs,
+      geo: data.timing.geoMs,
+      weather: data.timing.weatherMs,
+      ai: data.timing.aiMs
+    })
+  ];
+
+  if (typeof clientApiMs === "number") metricsParts.push(t("result.apiRoundTrip", { ms: clientApiMs }));
+  if (networkOverheadMs != null) metricsParts.push(t("result.netOverhead", { ms: networkOverheadMs }));
+
+  const metricsLine = metricsParts.join(" · ");
+
   return (
     <div className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]">
       <motion.section
@@ -48,24 +73,18 @@ export default function ResultView({
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <div className="text-xs tracking-widest text-black/60 dark:text-white/60">EDGE RESULT</div>
+            <div className="text-xs tracking-widest text-black/60 dark:text-white/60">{t("result.badge")}</div>
             <h2 className="text-lg font-semibold md:text-xl">
-              {data.location.city ? `${data.location.city}, ` : ""}
-              {data.location.country ?? "Unknown"} · {formatTemp(data.weather.temperatureC)} · {data.weather.description}
+              {place} · {formatTemp(data.weather.temperatureC)} · {data.weather.description || t("common.unknown")}
             </h2>
             <p className="text-xs text-black/60 dark:text-white/60">
-              {data.edge.provider} · {data.edge.node} · cache {data.cache.hit ? "hit" : "miss"} · ttl{" "}
-              {Math.round(data.cache.ttlMs / 60000)}m · geo {data.location.source}
+              {data.edge.provider} · {data.edge.node} · {t("result.cache")} {cacheLabel} · {t("result.ttl")}{" "}
+              {t("result.ttlValue", { minutes: ttlMinutes })} · {t("result.geo")} {geoSourceLabel}
             </p>
             <p className="text-xs text-black/60 dark:text-white/60">
-              Edge compute {data.timing.totalMs}ms (geo {data.timing.geoMs}ms · weather {data.timing.weatherMs}ms · ai{" "}
-              {data.timing.aiMs}ms)
-              {typeof clientApiMs === "number" ? ` · API round-trip ${clientApiMs}ms` : ""}
-              {networkOverheadMs != null ? ` · net/overhead ~${networkOverheadMs}ms` : ""}
+              {metricsLine}
             </p>
-            <p className="text-[11px] text-black/50 dark:text-white/45">
-              Tip: repeat the same prompt within 5–10 minutes to see cache hits and much lower end-to-end latency.
-            </p>
+            <p className="text-[11px] text-black/50 dark:text-white/45">{t("result.tip")}</p>
           </div>
 
           {shareUrl ? (
@@ -82,7 +101,7 @@ export default function ResultView({
                   }
                 }}
               >
-                {copied ? "Copied" : "Copy share link"}
+                {copied ? t("result.copied") : t("result.copyShare")}
               </button>
             </div>
           ) : null}
@@ -94,13 +113,13 @@ export default function ResultView({
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <div className="rounded-2xl border border-black/10 bg-white p-4 dark:border-white/10 dark:bg-black/30">
-            <div className="text-xs text-black/60 dark:text-white/60">Prompt</div>
+            <div className="text-xs text-black/60 dark:text-white/60">{t("result.prompt")}</div>
             <div className="mt-1 text-sm text-black/90 dark:text-white/90">{data.prompt}</div>
           </div>
           <div className="rounded-2xl border border-black/10 bg-white p-4 dark:border-white/10 dark:bg-black/30">
-            <div className="text-xs text-black/60 dark:text-white/60">AI</div>
+            <div className="text-xs text-black/60 dark:text-white/60">{t("result.ai")}</div>
             <div className="mt-1 text-sm text-black/90 dark:text-white/90">
-              {data.content.model} · {data.content.mode}
+              {t("result.aiValue", { model: data.content.model, mode: modeLabel })}
             </div>
           </div>
         </div>
@@ -126,17 +145,17 @@ export default function ResultView({
 
         <div className="mt-4 grid gap-3">
           <div className="rounded-2xl border border-black/10 bg-white p-4 dark:border-white/10 dark:bg-black/30">
-            <div className="text-xs text-black/60 dark:text-white/60">Edge cache (5–10 min)</div>
-            <div className="mt-1 text-sm text-black/90 dark:text-white/90">Keyed by prompt+lang+location. Hit reduces weather/AI calls.</div>
+            <div className="text-xs text-black/60 dark:text-white/60">{t("result.edgeCacheTitle")}</div>
+            <div className="mt-1 text-sm text-black/90 dark:text-white/90">{t("result.edgeCacheDesc")}</div>
           </div>
 
           <div className="rounded-2xl border border-black/10 bg-white p-4 dark:border-white/10 dark:bg-black/30">
-            <div className="text-xs text-black/60 dark:text-white/60">Share / View count demo</div>
+            <div className="text-xs text-black/60 dark:text-white/60">{t("result.shareTitle")}</div>
             <div className="mt-1 text-sm text-black/90 dark:text-white/90">
-              {data.share?.views != null ? `Views: ${data.share.views}` : "Views: N/A"}
+              {data.share?.views != null ? t("result.views", { count: data.share.views }) : t("result.viewsNA")}
             </div>
             <div className="mt-1 text-[11px] text-black/50 dark:text-white/45">
-              Share links embed a snapshot (so the page stays available). KV improves view-count stability.
+              {t("result.shareDesc")}
             </div>
           </div>
         </div>
