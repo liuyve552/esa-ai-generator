@@ -1,4 +1,4 @@
-export type GeoSource = "headers" | "ip_api" | "unknown";
+export type GeoSource = "headers" | "ip_api" | "share" | "unknown";
 
 export type LocationInfo = {
   city: string | null;
@@ -60,4 +60,3 @@ export type GenerateResponse = {
   timing: TimingInfo;
   generatedAt: string;
 };
-

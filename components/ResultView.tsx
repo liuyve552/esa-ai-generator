@@ -25,10 +25,13 @@ export default function ResultView({
   const [copied, setCopied] = useState(false);
 
   const shareUrl = useMemo(() => {
+    const origin = globalThis.location?.origin ?? "";
+    const fromApi = data.share?.url;
+    if (fromApi) return `${origin}${fromApi}`;
     const id = sharedId ?? data.share?.id;
     if (!id) return null;
-    return `${globalThis.location?.origin ?? ""}/s/?id=${id}`;
-  }, [data.share?.id, sharedId]);
+    return `${origin}/s/?id=${id}`;
+  }, [data.share?.id, data.share?.url, sharedId]);
 
   const networkOverheadMs =
     typeof clientApiMs === "number" ? Math.max(0, Math.round(clientApiMs - data.timing.totalMs)) : null;
@@ -51,10 +54,12 @@ export default function ResultView({
               {data.location.country ?? "Unknown"} · {formatTemp(data.weather.temperatureC)} · {data.weather.description}
             </h2>
             <p className="text-xs text-white/60">
-              {data.edge.provider} · {data.edge.node} · cache {data.cache.hit ? "hit" : "miss"} · ttl {Math.round(data.cache.ttlMs / 60000)}m · geo {data.location.source}
+              {data.edge.provider} · {data.edge.node} · cache {data.cache.hit ? "hit" : "miss"} · ttl{" "}
+              {Math.round(data.cache.ttlMs / 60000)}m · geo {data.location.source}
             </p>
             <p className="text-xs text-white/60">
-              Edge compute {data.timing.totalMs}ms (geo {data.timing.geoMs}ms · weather {data.timing.weatherMs}ms · ai {data.timing.aiMs}ms)
+              Edge compute {data.timing.totalMs}ms (geo {data.timing.geoMs}ms · weather {data.timing.weatherMs}ms · ai{" "}
+              {data.timing.aiMs}ms)
               {typeof clientApiMs === "number" ? ` · API round-trip ${clientApiMs}ms` : ""}
               {networkOverheadMs != null ? ` · net/overhead ~${networkOverheadMs}ms` : ""}
             </p>
@@ -112,7 +117,11 @@ export default function ResultView({
         className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-glow"
       >
         <div className="h-[360px] overflow-hidden rounded-2xl border border-white/10 bg-black/25">
-          <WorldMap latitude={data.location.latitude ?? 0} longitude={data.location.longitude ?? 0} city={data.location.city ?? undefined} />
+          <WorldMap
+            latitude={data.location.latitude ?? 0}
+            longitude={data.location.longitude ?? 0}
+            city={data.location.city ?? undefined}
+          />
         </div>
 
         <div className="mt-4 grid gap-3">
@@ -124,11 +133,12 @@ export default function ResultView({
           <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
             <div className="text-xs text-white/60">Share / View count demo</div>
             <div className="mt-1 text-sm text-white/90">{data.share?.views != null ? `Views: ${data.share.views}` : "Views: N/A"}</div>
-            <div className="mt-1 text-[11px] text-white/45">Note: share storage may expire or evict without KV; enable ESA KV for stability.</div>
+            <div className="mt-1 text-[11px] text-white/45">
+              Share links embed a snapshot (so the page stays available). KV improves view-count stability.
+            </div>
           </div>
         </div>
       </motion.aside>
     </div>
   );
 }
-

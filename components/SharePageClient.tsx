@@ -8,6 +8,7 @@ import type { GenerateResponse } from "@/lib/edge/types";
 export default function SharePageClient() {
   const sp = useSearchParams();
   const id = useMemo(() => (sp.get("id") ?? "").trim(), [sp]);
+  const d = useMemo(() => (sp.get("d") ?? "").trim(), [sp]);
 
   const [data, setData] = useState<GenerateResponse | null>(null);
   const [clientApiMs, setClientApiMs] = useState<number | null>(null);
@@ -18,36 +19,62 @@ export default function SharePageClient() {
     setClientApiMs(null);
     setError(null);
 
-    if (!id) return;
+    if (!id && !d) return;
 
     const ac = new AbortController();
 
-    fetch(`/api/view/${encodeURIComponent(id)}`, {
-      method: "POST",
-      cache: "no-store",
-      signal: ac.signal
-    }).catch(() => null);
+    const incView = (shareId: string) =>
+      fetch(`/api/view/${encodeURIComponent(shareId)}`, {
+        method: "POST",
+        cache: "no-store",
+        signal: ac.signal
+      }).catch(() => null);
 
-    const t0 = performance.now();
+    const load = async () => {
+      const t0 = performance.now();
 
-    fetch(`/api/share/${encodeURIComponent(id)}`, { cache: "no-store", signal: ac.signal })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(await res.text());
-        return (await res.json()) as GenerateResponse;
-      })
-      .then((json) => {
-        setClientApiMs(Math.round(performance.now() - t0));
-        setData(json);
-      })
-      .catch((e) => {
-        if (ac.signal.aborted) return;
-        setError(e instanceof Error ? e.message : String(e));
-      });
+      if (id) {
+        void incView(id);
+
+        const qs = new URLSearchParams();
+        qs.set("id", id);
+        if (d) qs.set("d", d);
+
+        const res = await fetch(`/api/share?${qs.toString()}`, { cache: "no-store", signal: ac.signal });
+        if (res.ok) {
+          const json = (await res.json()) as GenerateResponse;
+          setClientApiMs(Math.round(performance.now() - t0));
+          setData(json);
+          return;
+        }
+
+        if (res.status !== 404 || !d) {
+          throw new Error(await res.text());
+        }
+      }
+
+      // Fallback: replay from embedded share snapshot.
+      if (!d) throw new Error("Missing embedded share payload");
+
+      const res = await fetch(`/api/replay?d=${encodeURIComponent(d)}`, { cache: "no-store", signal: ac.signal });
+      if (!res.ok) throw new Error(await res.text());
+      const json = (await res.json()) as GenerateResponse;
+
+      if (json.share?.id) void incView(json.share.id);
+
+      setClientApiMs(Math.round(performance.now() - t0));
+      setData(json);
+    };
+
+    void load().catch((e) => {
+      if (ac.signal.aborted) return;
+      setError(e instanceof Error ? e.message : String(e));
+    });
 
     return () => ac.abort();
-  }, [id]);
+  }, [id, d]);
 
-  if (!id) {
+  if (!id && !d) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-glow">
         <h2 className="text-lg font-semibold">Missing share id</h2>
@@ -64,7 +91,7 @@ export default function SharePageClient() {
       {error ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-sm text-red-100">{error}</div>
       ) : null}
-      {data ? <ResultView data={data} sharedId={id} clientApiMs={clientApiMs ?? undefined} /> : null}
+      {data ? <ResultView data={data} sharedId={id || data.share?.id || undefined} clientApiMs={clientApiMs ?? undefined} /> : null}
     </>
   );
 }

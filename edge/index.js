@@ -127,14 +127,93 @@ async function sha256Base64Url(input) {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function base64UrlEncodeUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecodeUtf8(b64url) {
+  const b64 = String(b64url).replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+  const bin = atob(b64 + pad);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+function coerceString(v, fallback = "") {
+  return typeof v === "string" ? v : fallback;
+}
+
+function pickShareCore(payload) {
+  const prompt = coerceString(payload?.prompt).trim();
+  const lang = (coerceString(payload?.lang, "en").trim() || "en").slice(0, 12);
+
+  const loc = payload?.location ?? {};
+  const weather = payload?.weather ?? {};
+  const content = payload?.content ?? {};
+
+  return {
+    v: 1,
+    prompt,
+    lang,
+    location: {
+      city: typeof loc.city === "string" ? loc.city : null,
+      country: typeof loc.country === "string" ? loc.country : null,
+      region: typeof loc.region === "string" ? loc.region : null,
+      latitude: typeof loc.latitude === "number" ? loc.latitude : null,
+      longitude: typeof loc.longitude === "number" ? loc.longitude : null
+    },
+    weather: {
+      temperatureC: typeof weather.temperatureC === "number" ? weather.temperatureC : null,
+      weatherCode: typeof weather.weatherCode === "number" ? weather.weatherCode : null,
+      description: coerceString(weather.description, "Unknown")
+    },
+    content: {
+      text: coerceString(content.text),
+      model: coerceString(content.model, "unknown"),
+      mode: content?.mode === "qwen" ? "qwen" : "mock"
+    },
+    generatedAt: coerceString(payload?.generatedAt, new Date().toISOString())
+  };
+}
+
+async function computeShareId(payload) {
+  const core = pickShareCore(payload);
+  return sha256Base64Url(JSON.stringify(core));
+}
+
+function encodeShareDataForUrl(payload) {
+  const core = pickShareCore(payload);
+  return base64UrlEncodeUtf8(JSON.stringify(core));
+}
+
+function decodeShareDataFromUrl(d) {
+  try {
+    if (!d || typeof d !== "string") return null;
+    if (d.length > 12000) return null;
+    const jsonStr = base64UrlDecodeUtf8(d);
+    const obj = JSON.parse(jsonStr);
+    if (!obj || obj.v !== 1) return null;
+    if (typeof obj.prompt !== "string" || !obj.prompt.trim()) return null;
+    if (typeof obj.lang !== "string" || !obj.lang.trim()) return null;
+    if (!obj.location || typeof obj.location !== "object") return null;
+    if (!obj.weather || typeof obj.weather !== "object") return null;
+    if (!obj.content || typeof obj.content !== "object") return null;
+    return pickShareCore(obj);
+  } catch {
+    return null;
+  }
+}
+
 function shareKey(id) { return `share_${id}`; }
 
 function viewKey(id) { return `views_${id}`; }
 
 async function saveShare(payload, ttlMs) {
-  const id = await sha256Base64Url(
-    `${payload.lang}|${payload.prompt}|${payload.location.city || ""}|${payload.location.country || ""}|${payload.weather.weatherCode || ""}`
-  );
+  const id = await computeShareId(payload);
 
   const kv = getKv();
   const now = Date.now();
@@ -154,6 +233,13 @@ async function saveShare(payload, ttlMs) {
     await edgeCachePut(`https://edge-cache.local/share/${encodeURIComponent(id)}`, { payload }, ttlMs);
   }
   return id;
+}
+
+function buildShareUrl(id, d) {
+  const qp = new URLSearchParams();
+  qp.set("id", id);
+  if (d) qp.set("d", d);
+  return `/s/?${qp.toString()}`;
 }
 
 async function getShare(id) {
@@ -198,6 +284,45 @@ async function incrementView(id, ttlMs) {
   const next = current + 1;
   await edgeCachePut(`https://edge-cache.local/views/${encodeURIComponent(id)}`, { count: next }, ttlMs);
   return next;
+}
+
+async function replayFromD(d, request) {
+  const spec = decodeShareDataFromUrl(d);
+  if (!spec) return json({ error: "Invalid share payload" }, { status: 400 });
+
+  const started = nowMs();
+  const edge = getEdgeInfo(request.headers);
+
+  const id = await computeShareId(spec);
+  const views = await getViewCount(id);
+
+  const location = {
+    ...spec.location,
+    ip: null,
+    source: "share"
+  };
+
+  const locLabel = `${location.city || "unknown"}-${location.country || "unknown"}-${(location.latitude || 0).toFixed(2)}-${(location.longitude || 0).toFixed(2)}`;
+  const key = await cacheKeyFor({ prompt: spec.prompt, lang: spec.lang, location: locLabel });
+
+  return json({
+    prompt: spec.prompt,
+    lang: spec.lang,
+    location,
+    weather: spec.weather,
+    edge,
+    cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
+    content: spec.content,
+    share: { id, url: buildShareUrl(id, d), views },
+    timing: {
+      totalMs: Math.round(nowMs() - started),
+      geoMs: 0,
+      weatherMs: 0,
+      aiMs: 0,
+      originSimulatedMs: simulateOriginMs(Math.round(nowMs() - started), true)
+    },
+    generatedAt: spec.generatedAt
+  });
 }
 
 function describeWeather(code) {
@@ -450,10 +575,12 @@ async function handleGenerate(request, env) {
   if (cached.hit && cached.value) {
     const shareId = await saveShare(cached.value, DEFAULT_TTL_MS);
     const views = await getViewCount(shareId);
+    const d = encodeShareDataForUrl({ ...cached.value, share: { id: shareId } });
+    const shareUrl = d.length <= 6000 ? buildShareUrl(shareId, d) : buildShareUrl(shareId, null);
     return json({
       ...cached.value,
       cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
-      share: { id: shareId, url: `/s/?id=${shareId}`, views },
+      share: { id: shareId, url: shareUrl, views },
       timing: {
         totalMs: Math.round(nowMs() - started),
         geoMs,
@@ -526,10 +653,19 @@ async function handleGenerate(request, env) {
 
   const shareId = await saveShare(result, DEFAULT_TTL_MS);
   const views = await getViewCount(shareId);
-  const final = { ...result, share: { id: shareId, url: `/s/?id=${shareId}`, views } };
+  const d = encodeShareDataForUrl({ ...result, share: { id: shareId } });
+  const shareUrl = d.length <= 6000 ? buildShareUrl(shareId, d) : buildShareUrl(shareId, null);
+  const final = { ...result, share: { id: shareId, url: shareUrl, views } };
 
   await edgeCachePut(key, final, DEFAULT_TTL_MS);
   return json(final);
+}
+
+async function handleReplay(request) {
+  const url = new URL(request.url);
+  const d = (url.searchParams.get("d") || "").trim();
+  if (!d) return json({ error: "Missing d" }, { status: 400 });
+  return replayFromD(d, request);
 }
 
 async function handleShare(request) {
@@ -539,22 +675,33 @@ async function handleShare(request) {
     const payload = await request.json().catch(() => null);
     if (!payload) return json({ error: "Missing payload" }, { status: 400 });
     const id = await saveShare(payload, 10 * 60 * 1000);
-    return json({ id, url: `/s/?id=${id}` });
+    const d = encodeShareDataForUrl({ ...payload, share: { id } });
+    const shareUrl = d.length <= 6000 ? buildShareUrl(id, d) : buildShareUrl(id, null);
+    return json({ id, url: shareUrl });
   }
 
   const id = (url.searchParams.get("id") || "").trim();
   if (!id) return json({ error: "Missing id" }, { status: 400 });
 
   const res = await getShare(id);
-  if (!res) return json({ error: "Not found" }, { status: 404 });
-  return json(res);
+  if (res) return json(res);
+
+  const d = (url.searchParams.get("d") || "").trim();
+  if (d) return replayFromD(d, request);
+
+  return json({ error: "Not found" }, { status: 404 });
 }
 
-async function handleShareById(id) {
+async function handleShareById(id, request) {
   if (!id) return json({ error: "Missing id" }, { status: 400 });
   const res = await getShare(id);
-  if (!res) return json({ error: "Not found" }, { status: 404 });
-  return json(res);
+  if (res) return json(res);
+
+  const url = new URL(request.url);
+  const d = (url.searchParams.get("d") || "").trim();
+  if (d) return replayFromD(d, request);
+
+  return json({ error: "Not found" }, { status: 404 });
 }
 
 async function handleViews(id, request) {
@@ -582,10 +729,11 @@ async function routeFetch(request, env) {
   }
 
   if (url.pathname === "/api/generate") return handleGenerate(request, env);
+  if (url.pathname === "/api/replay") return handleReplay(request);
   if (url.pathname === "/api/share") return handleShare(request);
 
   const parts = url.pathname.split("/").filter(Boolean);
-  if (parts[1] === "share" && parts.length === 3 && request.method === "GET") return handleShareById(parts[2]);
+  if (parts[1] === "share" && parts.length === 3 && request.method === "GET") return handleShareById(parts[2], request);
   if (parts[1] === "view" && parts.length === 3 && (request.method === "GET" || request.method === "POST")) {
     return handleViews(parts[2], request);
   }
