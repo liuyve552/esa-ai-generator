@@ -5,9 +5,8 @@ import type { Metadata, Viewport } from "next";
 import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "Global Edge AI Personalizer",
-  description:
-    "Edge Runtime + Geo + Weather + AI + Caching: generate localized stories/advice with ultra-low-latency demos.",
+  title: "全球边缘神谕｜ESA Pages",
+  description: "在阿里云 ESA 边缘节点上：定位 → 天气 → AI/模板 → 缓存 → 分享海报，让“就近计算”变得可感知、可传播。",
   manifest: "/manifest.webmanifest"
 };
 
@@ -19,7 +18,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="zh" className="dark" suppressHydrationWarning>
       <body>
         <Providers>{children}</Providers>
       </body>

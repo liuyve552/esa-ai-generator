@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 type Theme = "dark" | "light";
 
@@ -12,6 +13,7 @@ function getInitialTheme(): Theme {
 }
 
 export default function ThemeToggle() {
+  const { t } = useTranslation();
   const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
@@ -26,7 +28,7 @@ export default function ThemeToggle() {
     window.localStorage.setItem("theme", theme);
   }, [theme]);
 
-  const label = useMemo(() => (theme === "dark" ? "Dark" : "Light"), [theme]);
+  const label = useMemo(() => (theme === "dark" ? t("theme.dark") : t("theme.light")), [t, theme]);
 
   return (
     <button

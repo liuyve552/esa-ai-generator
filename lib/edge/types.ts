@@ -14,6 +14,35 @@ export type WeatherInfo = {
   temperatureC: number | null;
   weatherCode: number | null;
   description: string;
+  timezone?: string | null;
+  localTime?: string | null;
+  isDay?: boolean | null;
+};
+
+export type GenerateMode = "oracle" | "travel" | "calm" | "focus" | "card";
+
+export type VisualInfo = {
+  seed: string;
+  svg: string;
+  palette: {
+    bg: string;
+    fg: string;
+    accent: string;
+  };
+};
+
+export type DailyInfo = {
+  date: string;
+  title: string;
+  tasks: string[];
+  luckyColor: string;
+  luckyNumber: number;
+  shareLine: string;
+};
+
+export type StatsInfo = {
+  todayGlobal: number;
+  todayCity: number;
 };
 
 export type EdgeInfo = {
@@ -51,6 +80,7 @@ export type TimingInfo = {
 export type GenerateResponse = {
   prompt: string;
   lang: string;
+  mode?: GenerateMode;
   location: LocationInfo;
   weather: WeatherInfo;
   edge: EdgeInfo;
@@ -58,5 +88,8 @@ export type GenerateResponse = {
   content: ContentInfo;
   share: ShareInfo;
   timing: TimingInfo;
+  visual?: VisualInfo | null;
+  daily?: DailyInfo | null;
+  stats?: StatsInfo | null;
   generatedAt: string;
 };

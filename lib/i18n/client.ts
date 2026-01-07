@@ -11,7 +11,7 @@ const initPromise = i18n
   .use(initReactI18next)
   .init({
     resources: resources as any,
-    fallbackLng: "en",
+    fallbackLng: "zh",
     supportedLngs: Object.keys(resources) as SupportedLang[],
     interpolation: { escapeValue: false },
     detection: {
@@ -21,4 +21,3 @@ const initPromise = i18n
   });
 
 export default Object.assign(i18n, { initPromise });
-

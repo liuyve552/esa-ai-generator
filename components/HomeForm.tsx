@@ -15,12 +15,21 @@ const LANGS = [
   { value: "fr", labelKey: "lang.fr" }
 ] as const;
 
+const MODES = [
+  { value: "oracle", labelKey: "mode.oracle" },
+  { value: "travel", labelKey: "mode.travel" },
+  { value: "focus", labelKey: "mode.focus" },
+  { value: "calm", labelKey: "mode.calm" },
+  { value: "card", labelKey: "mode.card" }
+] as const;
+
 export default function HomeForm() {
   const router = useRouter();
   const { t, i18n } = useTranslation();
 
   const [prompt, setPrompt] = useState<string>("");
   const [lang, setLang] = useState<string>("auto");
+  const [mode, setMode] = useState<string>("oracle");
 
   const autoLang = useMemo(() => {
     const v = (i18n.resolvedLanguage ?? i18n.language ?? "en").toLowerCase();
@@ -58,28 +67,50 @@ export default function HomeForm() {
           />
         </label>
 
-        <label className="space-y-2">
-          <span className="text-xs text-black/60 dark:text-white/60">{t("home.langLabel")}</span>
-          <select
-            value={lang}
-            onChange={(e) => setLang(e.target.value)}
-            className="h-[46px] w-full rounded-2xl border border-black/10 bg-white px-3 text-sm text-black outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/40 dark:text-white dark:focus:border-white/25"
-          >
-            {LANGS.map((l) => (
-              <option key={l.value} value={l.value}>
-                {t(l.labelKey)}
-              </option>
-            ))}
-          </select>
+        <div className="space-y-3">
+          <label className="space-y-2">
+            <span className="text-xs text-black/60 dark:text-white/60">{t("home.modeLabel")}</span>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              className="h-[46px] w-full rounded-2xl border border-black/10 bg-white px-3 text-sm text-black outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/40 dark:text-white dark:focus:border-white/25"
+            >
+              {MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {t(m.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-2">
+            <span className="text-xs text-black/60 dark:text-white/60">{t("home.langLabel")}</span>
+            <select
+              value={lang}
+              onChange={(e) => setLang(e.target.value)}
+              className="h-[46px] w-full rounded-2xl border border-black/10 bg-white px-3 text-sm text-black outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/40 dark:text-white dark:focus:border-white/25"
+            >
+              {LANGS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {t(l.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
 
           <button
-            onClick={() => router.push(`/result/?prompt=${encodeURIComponent(prompt)}&lang=${encodeURIComponent(effectiveLang)}`)}
-            disabled={!prompt.trim()}
-            className="mt-2 h-[46px] w-full rounded-2xl bg-black px-4 text-sm font-semibold text-white transition hover:bg-black/90 disabled:cursor-not-allowed disabled:bg-black/20 disabled:text-black/50 dark:bg-white dark:text-black dark:hover:bg-white/90 dark:disabled:bg-white/30 dark:disabled:text-black/60"
+            onClick={() =>
+              router.push(
+                `/result/?prompt=${encodeURIComponent(prompt.trim())}&lang=${encodeURIComponent(effectiveLang)}&mode=${encodeURIComponent(mode)}`
+              )
+            }
+            className="h-[46px] w-full rounded-2xl bg-black px-4 text-sm font-semibold text-white transition hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
           >
             {t("home.generate")}
           </button>
-        </label>
+
+          <div className="text-[11px] text-black/55 dark:text-white/55">{t("home.generateNoPrompt")}</div>
+        </div>
       </div>
 
       <div className="mt-5 text-xs text-black/60 dark:text-white/60">{t("home.hint")}</div>

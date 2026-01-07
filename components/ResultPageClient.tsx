@@ -11,11 +11,13 @@ export default function ResultPageClient() {
   const { t, i18n } = useTranslation();
 
   const prompt = useMemo(() => (sp.get("prompt") ?? "").trim(), [sp]);
-  const lang = useMemo(() => (sp.get("lang") ?? "en").trim() || "en", [sp]);
+  const lang = useMemo(() => (sp.get("lang") ?? "zh").trim() || "zh", [sp]);
+  const mode = useMemo(() => (sp.get("mode") ?? "oracle").trim() || "oracle", [sp]);
 
   const [data, setData] = useState<GenerateResponse | null>(null);
   const [clientApiMs, setClientApiMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
 
   useEffect(() => {
     if (!lang) return;
@@ -31,12 +33,12 @@ export default function ResultPageClient() {
     setData(null);
     setClientApiMs(null);
     setError(null);
-
-    if (!prompt) return;
+    setLoading(true);
 
     const url = new URL("/api/generate", globalThis.location.origin);
     url.searchParams.set("prompt", prompt);
     url.searchParams.set("lang", lang);
+    url.searchParams.set("mode", mode);
 
     const ac = new AbortController();
     const t0 = performance.now();
@@ -53,19 +55,21 @@ export default function ResultPageClient() {
       .catch((e) => {
         if (ac.signal.aborted) return;
         setError(e instanceof Error ? e.message : String(e));
-      });
+      })
+      .finally(() => setLoading(false));
 
     return () => ac.abort();
-  }, [prompt, lang]);
+  }, [prompt, lang, mode]);
 
-  if (!prompt) {
+  if (loading && !data && !error) {
     return (
       <div className="rounded-3xl border border-black/10 bg-white/70 p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.06),0_20px_60px_rgba(0,0,0,0.12)] dark:border-white/10 dark:bg-white/5 dark:shadow-glow">
-        <h2 className="text-lg font-semibold">{t("errors.missingPrompt.title")}</h2>
-        <p className="mt-2 text-sm text-black/70 dark:text-white/70">{t("errors.missingPrompt.desc")}</p>
-        <a className="mt-4 inline-flex rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90" href="/">
-          {t("actions.backHome")}
-        </a>
+        <div className="h-5 w-44 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+        <div className="mt-4 space-y-2">
+          <div className="h-4 w-full animate-pulse rounded bg-black/10 dark:bg-white/10" />
+          <div className="h-4 w-5/6 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+          <div className="h-4 w-4/6 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+        </div>
       </div>
     );
   }

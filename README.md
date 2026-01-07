@@ -1,43 +1,71 @@
-# Global Edge AI Personalizer（ESA Pages 大赛）
+# 全球边缘神谕（Alibaba Cloud ESA Pages 边缘开发大赛）
 
-本仓库为 ESA Pages 大赛提交，源码公开原创。
+一句话简介：把「定位 → 天气 → AI/模板 → 缓存 → 分享」全部搬到 ESA 边缘节点，做成一个**打开即生成、可打卡、可传播（海报/朗读/分享链接）**的“全球边缘神谕”应用。
 
 > 本项目由阿里云 ESA 提供加速、计算和保护：
 >
 > ![阿里云ESA Pages，构建、加速并保护你的网站](./public/esa-pages-banner.png)
 
-## 评委 1 分钟验收路径
+---
 
-1. 打开首页，输入任意提示词（示例见下），点击「生成」。
-2. 用同一个提示词再生成一次：预期看到 **cache hit**，并且端到端延迟明显降低。
-3. 点击「Copy share link」，在新标签页连续打开/刷新分享页：预期 **不会出现** `{"error":"Not found"}`。
+## 评委 1 分钟验收路径（零输入）
 
-示例提示词（任选其一）：
-- `给我一个本地化的旅行建议，包括天气`
-- `用一句小诗写下我所在城市的今晚`
-- `给我一个 30 分钟的散步路线建议，结合实时天气`
+1) 打开首页：立刻看到「零输入演示（自动生成）」卡片（无需输入、无需权限）。
 
-本项目采用 **Next.js App Router（静态导出）+ ESA 边缘函数（Functions）**：
-- 前端用 Next.js 构建现代 UI，并通过 `next.config.js` 的 `output: "export"` 产出静态站点到 `out/`。
-- 动态能力（定位 / 天气 / AI / 缓存 / 分享）由 ESA 边缘函数入口 `edge/index.js` 提供，路径为 `/api/*`。
+2) 点击「打开完整结果」：预期看到
+- 边缘节点信息（provider/node）
+- 缓存状态（hit/miss）、TTL、延迟对比图（边缘 vs 中心模拟基线）
+- “今日小任务（可打卡）”清单 + 进度
+- 可传播动作：复制分享链接 / 系统分享 / 下载海报 / 朗读 / 收藏
 
-> 说明：ESA 当前对 Next.js 采用“静态站点生成”方式部署，因此不能直接部署 Next 的 Route Handlers（`app/api/*`）。本仓库已将 API 迁移到 ESA 边缘函数入口。
+3) 返回首页，切换模式（今日神谕/旅行助手/专注清单/情绪安抚/社交卡片），**不输入任何提示**直接点「生成」：输出明显不同。
 
-## 亮点（对齐“技术探索”）
+4) 用**同一模式 + 同一提示词**再生成一次：预期 **cache hit**，端到端延迟明显降低。
 
-- **边缘函数全链路**：`edge/index.js` 在边缘完成 Geo → Weather → AI → Cache，并提供 `/api/generate`、`/api/share`、`/api/view/:id`。
-- **边缘缓存（5–10 分钟）**：同一 `{prompt, lang, location}` 自动命中缓存，减少外部 API 调用。
-- **多语言支持（i18next）**：自动检测浏览器语言 + 手动选择；AI 输出也随语言变化。
-- **全球节点可视化（Leaflet）**：世界地图标注用户位置 + 模拟边缘节点分布。
-- **分享链接“永不 404”**：分享链接内嵌快照 payload，KV/缓存丢失时仍可回放结果（更稳更适合评委复测）。
-- **浏览次数 Demo（非强一致）**：演示“边缘存储/缓存”思路；生产环境可换成真正 KV 的原子自增。
-- **暗黑模式 + 现代动效（Tailwind + Framer Motion）**。
-- **PWA（基础）**：Manifest + Service Worker 注册。
+5) 点击「复制分享链接」，在新标签页多次打开/刷新：预期**不会出现** `{"error":"Not found"}`（分享快照 + 404 回放兜底）。
 
-## 本地说明
+---
 
-- 本项目的 `/api/*` 由 **ESA 边缘函数**提供，推荐以 ESA 线上环境为准进行演示。
-- 你仍可本地启动前端开发：`npm i` → `npm run dev`（UI 可看，但本地 `/api/*` 不会自动生效）。
+## 核心架构（边缘化到极致）
+
+```text
+浏览器(静态页面)
+   │
+   ├─(GET) /api/generate?mode=...&lang=...&prompt=...
+   │        │
+   │        ├─ 边缘读 Geo（优先 Header，缺失时 IP 接口兜底）
+   │        ├─ 边缘拉 Weather（Open‑Meteo）
+   │        ├─ 边缘生成内容（通义千问 / 无 Key 模板降级）
+   │        ├─ caches.default + 内存 Map 做边缘缓存（5–10 分钟）
+   │        └─ 生成可分享链接：/s/?id=...&d=...（d 为快照，可回放）
+   │
+   ├─(GET) /api/share?id=...   → KV/缓存取分享结果
+   ├─(GET) /api/replay?d=...   → 无 KV 也能回放（永不 404）
+   └─(POST) /api/view/:id      → 访问次数 Demo（有 KV 更稳定）
+```
+
+---
+
+## 为什么这次能拿高分（对齐评审维度）
+
+### 创意卓越（“哇”点）
+- **零输入神谕**：打开就自动生成，不再让评委面对空白页面。
+- **边缘纹章（Sigil）**：由 mode + 日期 + 城市 + 天气种子生成的可视化符号（每个地点/模式都不一样）。
+- **每日小任务（打卡）**：把生成内容从“一次性输出”变成“可持续的互动/留存”。
+- **海报导出 + 朗读**：一键生成可传播图片，配合系统分享与 TTS，天然适合社交平台扩散。
+
+### 实用价值（能留住人）
+- 五种模式直连真实场景：**旅行建议 / 专注清单 / 情绪安抚 / 社交卡片 / 今日神谕**。
+- **无 Key 也好用**：没有通义 Key 也能稳定输出模板内容，保证演示不翻车。
+- **收藏与历史**：结果页可收藏，支持用户形成自己的“城市神谕收藏夹”。
+
+### 技术探索（在 81 的基础上再抬一档）
+- **边缘缓存可观测**：同一 mode+prompt+lang+location 命中缓存，明显降低端到端延迟。
+- **分享链接“永不 404”**：`d` 参数携带快照，可在 KV/缓存丢失时回放（评委复测友好）。
+- **边缘韧性**：对外部 API 增加超时与多源兜底（位置 IP API 多源兜底、天气字段缺失兜底）。
+- **隐私友好**：结果不暴露用户 IP（只用于边缘侧定位兜底）。
+
+---
 
 ## 部署到 ESA Pages（简版但够用）
 
@@ -46,12 +74,14 @@
 3. 构建配置使用仓库根目录 `esa.jsonc`（推荐直接沿用）：
    - `installCommand`: `npm install`
    - `buildCommand`: `npm run build`
-   - `outputDirectory`: `out`
-   - Functions 入口：`edge/index.js`
-4. 配置环境变量（可选，不配也能演示 mock）：
+   - `assets.directory`: `./out`
+   - Functions 入口：`./edge/index.js`
+4. 环境变量（可选，不配也能演示模板）：
    - `DASHSCOPE_API_KEY`：通义千问 DashScope Key（可空）
    - `AI_TEXT_MODEL`：默认 `qwen-max`
-5. 部署成功后拿到访问 URL，按「评委 1 分钟验收路径」验证即可。
+5. 部署成功后，按「评委 1 分钟验收路径」验证即可。
+
+---
 
 ## 目录结构（核心）
 
@@ -65,6 +95,7 @@ app/
 components/
   Providers.tsx
   HomeForm.tsx
+  HomeAutoDemo.tsx
   ResultView.tsx
   ResultPageClient.tsx
   SharePageClient.tsx
@@ -76,30 +107,29 @@ components/
 edge/
   index.js
 lib/
+  i18n/
   edge/
-    cache.ts
-    geo.ts
-    weather.ts
-    qwen.ts
-    share.ts
-    types.ts
 public/
   icon.svg
   manifest.webmanifest
   sw.js
 ```
 
+---
+
 ## 调试 / 常见问题
 
 - 构建日志提示 `Assets directory not set`：检查 `esa.jsonc` 是否包含 `assets.directory`，并且构建后确实生成了 `out/`。
-- 结果一直是 mock：检查 ESA 环境变量是否设置了 `DASHSCOPE_API_KEY`，并确认已触发重新部署。
+- 结果一直是模板：检查 ESA 环境变量是否设置了 `DASHSCOPE_API_KEY`，并确认已触发重新部署。
 - 地图空白：确认网络可访问 OpenStreetMap Tile；或在企业网络下更换 tile 源。
-- 位置不准：不同平台提供的地理 Header 不同，本项目优先读 Header，缺失时 fallback 到 `ipwho.is`。
-- 查看次数不准确：演示用缓存实现，非原子递增；比赛展示足够，生产建议用真正 KV。
+- 位置不准：不同平台提供的地理 Header 不同；本项目优先读 Header，缺失时再用 IP 接口兜底。
+- 访问次数不稳定：演示用缓存实现，非强一致；启用 KV 后更稳定。
+
+---
 
 ## 合规声明
 
-- 作品为参赛者原创，不抄袭、不作假；如引用第三方服务（如 Open-Meteo / OSM），仅用于合法范围内的接口调用与展示。
-- 内容输出由模型或模板生成，已避免违法、暴力、仇恨、误导等不当信息（如需更严格可在边缘函数侧增加过滤）。
-
+- 作品为参赛者原创，不抄袭、不作假、不侵权。
+- 引用第三方服务（如 Open‑Meteo / OpenStreetMap / IP 地理接口）仅用于合法范围内的接口调用与展示。
+- 内容输出由模型或模板生成，已避免违法、暴力、仇恨、误导等不当信息；如需更严格可在边缘函数侧增加过滤。
 
