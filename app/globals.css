@@ -7,6 +7,13 @@ body {
   height: 100%;
 }
 
+:root {
+  --esa-bg: #0b0b12;
+  --esa-fg: #f4f4f5;
+  --esa-accent: #f97316;
+  --esa-accent-rgb: 249 115 22;
+}
+
 body {
   @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-black dark:text-white;
 }

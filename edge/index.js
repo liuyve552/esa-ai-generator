@@ -4,6 +4,8 @@
 const DEFAULT_TTL_MS = 8 * 60 * 1000;
 const KV_NAMESPACE = "esa-ai-generator";
 const SUPPORTED_MODES = new Set(["oracle", "travel", "focus", "calm", "card"]);
+const SUPPORTED_MOODS = new Set(["auto", "happy", "anxious"]);
+const SUPPORTED_WEATHER_OVERRIDE = new Set(["auto", "clear", "rain"]);
 
 function normalizeLang(lang) {
   const v = String(lang || "zh").toLowerCase();
@@ -13,6 +15,22 @@ function normalizeLang(lang) {
 function normalizeMode(mode) {
   const v = String(mode || "oracle").toLowerCase();
   return SUPPORTED_MODES.has(v) ? v : "oracle";
+}
+
+function normalizeMood(mood) {
+  const v = String(mood || "auto").toLowerCase().trim();
+  if (SUPPORTED_MOODS.has(v)) return v;
+  if (v.includes("happy")) return "happy";
+  if (v.includes("anx")) return "anxious";
+  return "auto";
+}
+
+function normalizeWeatherOverride(weather) {
+  const v = String(weather || "auto").toLowerCase().trim();
+  if (SUPPORTED_WEATHER_OVERRIDE.has(v)) return v;
+  if (v.includes("clear")) return "clear";
+  if (v.includes("rain")) return "rain";
+  return "auto";
 }
 
 function isZhLang(lang) {
@@ -162,7 +180,7 @@ function coerceString(v, fallback = "") {
   return typeof v === "string" ? v : fallback;
 }
 
-function pickShareCore(payload) {
+function pickShareCoreV1(payload) {
   const prompt = coerceString(payload?.prompt).trim();
   const lang = normalizeLang(coerceString(payload?.lang, "zh").trim() || "zh");
   const mode = normalizeMode(payload?.mode);
@@ -200,13 +218,33 @@ function pickShareCore(payload) {
   };
 }
 
-async function computeShareId(payload) {
-  const core = pickShareCore(payload);
+function pickShareCoreV2(payload) {
+  const v1 = pickShareCoreV1(payload);
+  return {
+    v: 2,
+    prompt: v1.prompt,
+    lang: v1.lang,
+    mode: v1.mode,
+    mood: normalizeMood(payload?.mood),
+    weatherOverride: normalizeWeatherOverride(payload?.weatherOverride ?? payload?.weather),
+    location: v1.location,
+    weather: v1.weather,
+    content: v1.content,
+    generatedAt: v1.generatedAt
+  };
+}
+
+async function computeShareIdFromCore(core) {
   return sha256Base64Url(JSON.stringify(core));
 }
 
+async function computeShareId(payload) {
+  const core = pickShareCoreV2(payload);
+  return computeShareIdFromCore(core);
+}
+
 function encodeShareDataForUrl(payload) {
-  const core = pickShareCore(payload);
+  const core = pickShareCoreV2(payload);
   return base64UrlEncodeUtf8(JSON.stringify(core));
 }
 
@@ -216,13 +254,13 @@ function decodeShareDataFromUrl(d) {
     if (d.length > 12000) return null;
     const jsonStr = base64UrlDecodeUtf8(d);
     const obj = JSON.parse(jsonStr);
-    if (!obj || obj.v !== 1) return null;
+    if (!obj || (obj.v !== 1 && obj.v !== 2)) return null;
     if (typeof obj.prompt !== "string" || !obj.prompt.trim()) return null;
     if (typeof obj.lang !== "string" || !obj.lang.trim()) return null;
     if (!obj.location || typeof obj.location !== "object") return null;
     if (!obj.weather || typeof obj.weather !== "object") return null;
     if (!obj.content || typeof obj.content !== "object") return null;
-    return pickShareCore(obj);
+    return obj.v === 2 ? pickShareCoreV2(obj) : pickShareCoreV1(obj);
   } catch {
     return null;
   }
@@ -313,8 +351,11 @@ async function replayFromD(d, request) {
   const started = nowMs();
   const edge = getEdgeInfo(request.headers);
 
-  const id = await computeShareId(spec);
+  const id = await computeShareIdFromCore(spec);
   const views = await getViewCount(id);
+
+  const mood = normalizeMood(spec.mood);
+  const weatherOverride = normalizeWeatherOverride(spec.weatherOverride);
 
   const location = {
     ...spec.location,
@@ -323,18 +364,27 @@ async function replayFromD(d, request) {
   };
 
   const palette = pickPalette({ mode: spec.mode, weatherCode: spec.weather.weatherCode, isDay: spec.weather.isDay });
-  const daily = makeDaily({ mode: spec.mode, lang: spec.lang, location, weather: spec.weather, palette });
+  const daily = makeDaily({ mode: spec.mode, mood, lang: spec.lang, location, weather: spec.weather, palette });
   const visualSeed = `${daily.seed}|${spec.prompt}`;
   const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
   const stats = makeStats({ lang: spec.lang, location, weather: spec.weather, mode: spec.mode });
 
   const locLabel = `${location.city || "unknown"}-${location.country || "unknown"}-${(location.latitude || 0).toFixed(2)}-${(location.longitude || 0).toFixed(2)}`;
-  const key = await cacheKeyFor({ prompt: spec.prompt, lang: spec.lang, mode: spec.mode, location: locLabel });
+  const key = await cacheKeyFor({
+    prompt: spec.prompt,
+    lang: spec.lang,
+    mode: spec.mode,
+    mood,
+    weatherOverride,
+    location: locLabel
+  });
 
   return json({
     prompt: spec.prompt,
     lang: spec.lang,
     mode: spec.mode,
+    mood,
+    weatherOverride,
     location,
     weather: spec.weather,
     edge,
@@ -468,6 +518,30 @@ async function getWeather(latitude, longitude, lang) {
   const info = { temperatureC, weatherCode, description: describeWeather(weatherCode, langKey), timezone, localTime, isDay };
   await edgeCachePut(cacheKey, info, 10 * 60 * 1000);
   return info;
+}
+
+function applyWeatherOverride(weather, weatherOverride, lang) {
+  const w = normalizeWeatherOverride(weatherOverride);
+  if (w === "auto") return weather;
+
+  const zh = isZhLang(lang);
+  const spec =
+    w === "clear"
+      ? { code: 0, zh: "晴朗", en: "Clear sky" }
+      : w === "cloud"
+        ? { code: 2, zh: "多云", en: "Partly cloudy" }
+        : w === "rain"
+          ? { code: 61, zh: "下雨", en: "Rain" }
+          : w === "snow"
+            ? { code: 71, zh: "降雪", en: "Snow fall" }
+            : null;
+
+  if (!spec) return weather;
+  return {
+    ...weather,
+    weatherCode: spec.code,
+    description: zh ? spec.zh : spec.en
+  };
 }
 
 async function generateWithQwen({ apiKey, model, messages }) {
@@ -604,9 +678,10 @@ function makeSigilSvg(seed, palette) {
   ].join("");
 }
 
-function makeDaily({ mode, lang, location, weather, palette }) {
+function makeDaily({ mode, mood, lang, location, weather, palette }) {
   const zh = isZhLang(lang);
   const m = normalizeMode(mode);
+  const md = normalizeMood(mood);
   const date = localDateKey(weather);
   const city = location?.city || (zh ? "你的城市" : "your city");
   const seed = `${date}|${m}|${city}|${weather?.weatherCode ?? "x"}`;
@@ -642,9 +717,24 @@ function makeDaily({ mode, lang, location, weather, palette }) {
     ? `${city} · 今日${m === "oracle" ? "神谕" : m === "travel" ? "出行" : m === "focus" ? "专注" : m === "calm" ? "安抚" : "卡片"}`
     : `${city} · ${m === "oracle" ? "Oracle" : m === "travel" ? "Travel" : m === "focus" ? "Focus" : m === "calm" ? "Calm" : "Card"}`;
 
+  const toneZh = {
+    auto: "把今天过小一点、也亮一点。",
+    happy: "把今天过亮一点、也勇敢一点。",
+    anxious: "把今天过慢一点、也温柔一点。",
+    calm: "把今天过稳一点、也清澈一点。",
+    tired: "把今天过轻一点、也好好休息。"
+  }[md];
+  const toneEn = {
+    auto: "make today smaller—and brighter.",
+    happy: "make today brighter—and a little braver.",
+    anxious: "slow down gently—one step at a time.",
+    calm: "keep it steady—and clear.",
+    tired: "make it lighter—and rest well."
+  }[md];
+
   const shareLine = zh
-    ? `我在 ${city}（${w}，${temp}）用边缘节点抽到一条“今日神谕”：把今天过小一点、也亮一点。`
-    : `In ${city} (${w}, ${temp}) my Edge Oracle says: make today smaller—and brighter.`;
+    ? `我在 ${city}（${w}，${temp}）用边缘节点抽到一条“今日神谕”：${toneZh}`
+    : `In ${city} (${w}, ${temp}) my Edge Oracle says: ${toneEn}`;
 
   return { date, title, tasks: uniqTasks, luckyColor, luckyNumber, shareLine, seed };
 }
@@ -687,16 +777,24 @@ function buildSystemPrompt(lang) {
   ].join("\n");
 }
 
-function buildUserPrompt({ prompt, mode, location, weather, lang }) {
+function buildUserPrompt({ prompt, mode, mood, weatherOverride, location, weather, lang }) {
   const where = `${location.city ?? (isZhLang(lang) ? "未知城市" : "Unknown city")}, ${location.country ?? (isZhLang(lang) ? "未知国家" : "Unknown country")}`;
   const temp = weather.temperatureC == null ? (isZhLang(lang) ? "未知温度" : "unknown temp") : `${Math.round(weather.temperatureC)}°C`;
   const m = normalizeMode(mode);
+  const md = normalizeMood(mood);
+  const wo = normalizeWeatherOverride(weatherOverride);
   const modeLabelZh = { oracle: "今日神谕", travel: "旅行助手", focus: "专注清单", calm: "情绪安抚", card: "社交卡片" }[m];
   const modeLabelEn = { oracle: "Daily oracle", travel: "Travel helper", focus: "Focus checklist", calm: "Calm & care", card: "Social card" }[m];
+  const moodZh = { auto: "自动", happy: "开心", anxious: "焦虑", calm: "平静", tired: "疲惫" }[md];
+  const moodEn = { auto: "auto", happy: "happy", anxious: "anxious", calm: "calm", tired: "tired" }[md];
+  const weatherZh = { auto: "自动", clear: "晴", cloud: "多云", rain: "雨", snow: "雪" }[wo];
+  const weatherEn = { auto: "auto", clear: "clear", cloud: "cloud", rain: "rain", snow: "snow" }[wo];
 
   if (isZhLang(lang)) {
     return [
       `模式：${modeLabelZh}`,
+      `心情：${moodZh}`,
+      `天气偏好：${weatherZh}`,
       `地点：${where}`,
       `天气：${weather.description}，${temp}`,
       `用户提示：${prompt}`,
@@ -706,6 +804,8 @@ function buildUserPrompt({ prompt, mode, location, weather, lang }) {
 
   return [
     `Mode: ${modeLabelEn}`,
+    `Mood: ${moodEn}`,
+    `Weather preference: ${weatherEn}`,
     `Location: ${where}`,
     `Weather: ${weather.description}, ${temp}`,
     `User prompt: ${prompt}`,
@@ -812,8 +912,10 @@ function getEdgeInfo(headers) {
   return { provider: "Edge", node: "near-user", requestId: null };
 }
 
-async function cacheKeyFor({ prompt, lang, mode, location }) {
-  const buf = new TextEncoder().encode(`${normalizeLang(lang)}|${normalizeMode(mode)}|${location}|${prompt}`);
+async function cacheKeyFor({ prompt, lang, mode, mood, weatherOverride, location }) {
+  const buf = new TextEncoder().encode(
+    `${normalizeLang(lang)}|${normalizeMode(mode)}|${normalizeMood(mood)}|${normalizeWeatherOverride(weatherOverride)}|${location}|${prompt}`
+  );
   const digest = await crypto.subtle.digest("SHA-256", buf);
   const bytes = new Uint8Array(digest);
   let bin = "";
@@ -846,12 +948,24 @@ async function handleGenerate(request, env) {
   let prompt = (url.searchParams.get("prompt") || "").trim();
   let lang = normalizeLang((url.searchParams.get("lang") || "zh").trim() || "zh");
   let mode = normalizeMode((url.searchParams.get("mode") || "oracle").trim() || "oracle");
+  let mood = normalizeMood((url.searchParams.get("mood") || "auto").trim() || "auto");
+  let weatherOverride = normalizeWeatherOverride((url.searchParams.get("weather") || "auto").trim() || "auto");
+  let coords = null;
 
   if (request.method === "POST") {
     const body = await request.json().catch(() => ({}));
     if (typeof body?.prompt === "string") prompt = body.prompt.trim();
     if (typeof body?.lang === "string") lang = normalizeLang(body.lang.trim() || lang);
     if (typeof body?.mode === "string") mode = normalizeMode(body.mode.trim() || mode);
+    if (typeof body?.mood === "string") mood = normalizeMood(body.mood.trim() || mood);
+    if (typeof body?.weather === "string") weatherOverride = normalizeWeatherOverride(body.weather.trim() || weatherOverride);
+
+    const c = body?.coords;
+    if (c && typeof c === "object") {
+      const lat = Number(c.latitude);
+      const lon = Number(c.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) coords = { latitude: lat, longitude: lon };
+    }
   }
 
   if (!prompt) prompt = defaultPromptFor(mode, lang);
@@ -861,21 +975,39 @@ async function handleGenerate(request, env) {
 
   const geoStart = nowMs();
   const rawLocation = await detectLocation(request);
-  const location = { ...rawLocation, ip: null };
+  const location = {
+    ...rawLocation,
+    latitude: coords?.latitude ?? rawLocation.latitude,
+    longitude: coords?.longitude ?? rawLocation.longitude,
+    source: coords ? "geolocation" : rawLocation.source,
+    ip: null
+  };
   const geoMs = Math.round(nowMs() - geoStart);
 
   const locLabel = `${location.city || "unknown"}-${location.country || "unknown"}-${(location.latitude || 0).toFixed(2)}-${(location.longitude || 0).toFixed(2)}`;
-  const key = await cacheKeyFor({ prompt, lang, mode, location: locLabel });
+  const key = await cacheKeyFor({ prompt, lang, mode, mood, weatherOverride, location: locLabel });
 
   const cached = await edgeCacheGet(key);
   if (cached.hit && cached.value) {
     const base = cached.value;
-    const palette = base?.visual?.palette || pickPalette({ mode, weatherCode: base?.weather?.weatherCode, isDay: base?.weather?.isDay });
-    const daily = base?.daily || makeDaily({ mode, lang, location: base?.location || location, weather: base?.weather || {}, palette });
+    const baseMood = base?.mood ?? mood;
+    const baseWeatherOverride = base?.weatherOverride ?? weatherOverride;
+    const palette =
+      base?.visual?.palette || pickPalette({ mode, weatherCode: base?.weather?.weatherCode, isDay: base?.weather?.isDay });
+    const daily =
+      base?.daily ||
+      makeDaily({
+        mode,
+        mood: baseMood,
+        lang,
+        location: base?.location || location,
+        weather: base?.weather || {},
+        palette
+      });
     const visualSeed = `${daily.seed || localDateKey(base?.weather)}|${base?.prompt || prompt}`;
     const visual = base?.visual?.svg ? base.visual : { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
     const stats = base?.stats || makeStats({ lang, location: base?.location || location, weather: base?.weather || {}, mode });
-    const enriched = { ...base, lang, mode, daily, visual, stats };
+    const enriched = { ...base, lang, mode, mood: baseMood, weatherOverride: baseWeatherOverride, daily, visual, stats };
 
     const shareId = await saveShare(enriched, DEFAULT_TTL_MS);
     const views = await getViewCount(shareId);
@@ -896,14 +1028,15 @@ async function handleGenerate(request, env) {
   }
 
   const weatherStart = nowMs();
-  const weather =
+  let weather =
     location.latitude != null && location.longitude != null
       ? await getWeather(location.latitude, location.longitude, lang)
       : { temperatureC: null, weatherCode: null, description: describeWeather(null, lang), timezone: null, localTime: null, isDay: null };
+  weather = applyWeatherOverride(weather, weatherOverride, lang);
   const weatherMs = Math.round(nowMs() - weatherStart);
 
   const palette = pickPalette({ mode, weatherCode: weather.weatherCode, isDay: weather.isDay });
-  const daily = makeDaily({ mode, lang, location, weather, palette });
+  const daily = makeDaily({ mode, mood, lang, location, weather, palette });
   const visualSeed = `${daily.seed}|${prompt}`;
   const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
   const stats = makeStats({ lang, location, weather, mode });
@@ -919,7 +1052,7 @@ async function handleGenerate(request, env) {
   if (apiKey) {
     try {
       const sys = buildSystemPrompt(lang);
-      const user = buildUserPrompt({ prompt, mode, location, weather, lang });
+      const user = buildUserPrompt({ prompt, mode, mood, weatherOverride, location, weather, lang });
       const out = await generateWithQwen({
         apiKey,
         model,
@@ -944,6 +1077,8 @@ async function handleGenerate(request, env) {
     prompt,
     lang,
     mode,
+    mood,
+    weatherOverride,
     location,
     weather,
     edge,

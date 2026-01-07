@@ -1,0 +1,367 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { GenerateResponse } from "@/lib/edge/types";
+import ResultView from "@/components/ResultView";
+import DebugPanel from "@/components/DebugPanel";
+
+type Mode = "oracle" | "travel" | "focus" | "calm" | "card";
+type Mood = "auto" | "happy" | "anxious";
+type WeatherOverride = "auto" | "clear" | "rain";
+
+const MODES: { value: Mode; labelKey: string }[] = [
+  { value: "oracle", labelKey: "mode.oracle" },
+  { value: "travel", labelKey: "mode.travel" },
+  { value: "focus", labelKey: "mode.focus" },
+  { value: "calm", labelKey: "mode.calm" },
+  { value: "card", labelKey: "mode.card" }
+];
+
+const MOODS: { value: Mood; labelKey: string }[] = [
+  { value: "auto", labelKey: "mood.auto" },
+  { value: "happy", labelKey: "mood.happy" },
+  { value: "anxious", labelKey: "mood.anxious" }
+];
+
+const WEATHER: { value: WeatherOverride; labelKey: string }[] = [
+  { value: "auto", labelKey: "weather.auto" },
+  { value: "clear", labelKey: "weather.clear" },
+  { value: "rain", labelKey: "weather.rain" }
+];
+
+function GlobeLogo({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="28"
+      height="28"
+      viewBox="0 0 64 64"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+    >
+      <circle cx="32" cy="32" r="22" stroke="currentColor" strokeWidth="3" />
+      <path
+        d="M10 32h44"
+        stroke="currentColor"
+        strokeOpacity="0.65"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <path
+        d="M32 10c6 7 10 14 10 22s-4 15-10 22c-6-7-10-14-10-22s4-15 10-22Z"
+        stroke="currentColor"
+        strokeOpacity="0.65"
+        strokeWidth="3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18 18c4 2 9 3 14 3s10-1 14-3"
+        stroke="currentColor"
+        strokeOpacity="0.45"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <path
+        d="M18 46c4-2 9-3 14-3s10 1 14 3"
+        stroke="currentColor"
+        strokeOpacity="0.45"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function GearIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M19.4 13.5a7.9 7.9 0 0 0 0-3l2-1.5-2-3.4-2.4 1a8.5 8.5 0 0 0-2.6-1.5l-.4-2.5H10l-.4 2.5A8.5 8.5 0 0 0 7 6.6l-2.4-1-2 3.4 2 1.5a7.9 7.9 0 0 0 0 3l-2 1.5 2 3.4 2.4-1a8.5 8.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a8.5 8.5 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.5Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function useEffectiveLang() {
+  const { i18n } = useTranslation();
+  return useMemo(() => {
+    const v = (i18n.resolvedLanguage ?? i18n.language ?? "zh").toLowerCase();
+    return v.split("-")[0] ?? "zh";
+  }, [i18n.language, i18n.resolvedLanguage]);
+}
+
+type Coords = { latitude: number; longitude: number };
+
+function hexToRgbTriplet(hex: string): string | null {
+  const raw = String(hex || "").trim().replace(/^#/, "");
+  if (raw.length !== 6) return null;
+  const r = Number.parseInt(raw.slice(0, 2), 16);
+  const g = Number.parseInt(raw.slice(2, 4), 16);
+  const b = Number.parseInt(raw.slice(4, 6), 16);
+  if (![r, g, b].every((n) => Number.isFinite(n))) return null;
+  return `${r} ${g} ${b}`;
+}
+
+async function getGeolocationIfGranted(): Promise<Coords | null> {
+  try {
+    if (typeof navigator === "undefined") return null;
+    if (!("geolocation" in navigator)) return null;
+
+    const perms = (navigator as any).permissions;
+    if (perms?.query) {
+      const st = await perms.query({ name: "geolocation" });
+      if (st?.state !== "granted") return null;
+    }
+
+    return await new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: false, timeout: 1200, maximumAge: 10 * 60 * 1000 }
+      );
+    });
+  } catch {
+    return null;
+  }
+}
+
+export default function OraclePage() {
+  const { t, i18n } = useTranslation();
+  const effectiveLang = useEffectiveLang();
+
+  const [mode, setMode] = useState<Mode>("oracle");
+  const [mood, setMood] = useState<Mood>("auto");
+  const [weatherOverride, setWeatherOverride] = useState<WeatherOverride>("auto");
+  const [prompt, setPrompt] = useState<string>("");
+  const [debugOpen, setDebugOpen] = useState<boolean>(false);
+
+  const [coords, setCoords] = useState<Coords | null>(null);
+
+  const [data, setData] = useState<GenerateResponse | null>(null);
+  const [clientApiMs, setClientApiMs] = useState<number | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const lastReq = useRef(0);
+
+  useEffect(() => {
+    if (!effectiveLang) return;
+    if (i18n.language !== effectiveLang) void i18n.changeLanguage(effectiveLang);
+  }, [effectiveLang, i18n]);
+
+  useEffect(() => {
+    void getGeolocationIfGranted().then((c) => setCoords(c));
+  }, []);
+
+  useEffect(() => {
+    if (!data?.visual?.palette) return;
+    const p = data.visual.palette;
+    const root = document.documentElement;
+    root.style.setProperty("--esa-bg", p.bg);
+    root.style.setProperty("--esa-fg", p.fg);
+    const rgb = hexToRgbTriplet(p.accent);
+    if (rgb) root.style.setProperty("--esa-accent-rgb", rgb);
+  }, [data?.visual?.palette]);
+
+  const generate = async (opts?: { auto?: boolean }) => {
+    const reqId = ++lastReq.current;
+    setLoading(true);
+    setError(null);
+
+    const started = performance.now();
+    try {
+      const url = new URL("/api/generate", globalThis.location.origin);
+      url.searchParams.set("lang", effectiveLang);
+      url.searchParams.set("mode", mode);
+      url.searchParams.set("mood", mood);
+      url.searchParams.set("weather", weatherOverride);
+      url.searchParams.set("prompt", prompt.trim());
+      if (opts?.auto) url.searchParams.set("auto", "1");
+
+      const res = await fetch(url, {
+        method: coords ? "POST" : "GET",
+        cache: "no-store",
+        headers: coords ? { "Content-Type": "application/json" } : undefined,
+        body: coords
+          ? JSON.stringify({
+              prompt: prompt.trim(),
+              lang: effectiveLang,
+              mode,
+              mood,
+              weather: weatherOverride,
+              coords
+            })
+          : undefined
+      });
+
+      if (reqId !== lastReq.current) return;
+
+      if (!res.ok) throw new Error(await res.text());
+      const json = (await res.json()) as GenerateResponse;
+      setClientApiMs(Math.round(performance.now() - started));
+      setData(json);
+    } catch (e) {
+      if (reqId !== lastReq.current) return;
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (reqId === lastReq.current) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void generate({ auto: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLang]);
+
+  return (
+    <div className="mx-auto w-full max-w-5xl px-5 pb-16 pt-8 md:px-6 md:pt-10">
+      <nav className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="text-[#F97316]">
+            <GlobeLogo className="h-7 w-7" />
+          </div>
+          <div className="leading-tight">
+            <div className="text-sm font-semibold text-black/90 dark:text-white/90">全球边缘神谕</div>
+            <div className="text-xs text-black/55 dark:text-white/55">打开即用 · 边缘就近 · 可分享海报</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <label className="hidden md:block">
+            <span className="sr-only">{t("home.modeLabel")}</span>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as Mode)}
+              className="h-9 rounded-xl border border-black/10 bg-white/60 px-3 text-xs text-black/80 backdrop-blur focus:border-black/20 dark:border-white/15 dark:bg-black/30 dark:text-white/85"
+            >
+              {MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {t(m.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-black/10 bg-white/60 px-3 text-xs text-black/80 backdrop-blur transition hover:bg-white/80 dark:border-white/15 dark:bg-black/30 dark:text-white/85 dark:hover:bg-black/40"
+            onClick={() => setDebugOpen((v) => !v)}
+            aria-label={debugOpen ? "隐藏技术细节" : "显示技术细节"}
+          >
+            <GearIcon className="h-5 w-5" />
+          </button>
+        </div>
+      </nav>
+
+      <section className="mt-7 rounded-3xl border border-black/10 bg-white/55 p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_18px_60px_rgba(0,0,0,0.10)] backdrop-blur dark:border-white/10 dark:bg-black/25 dark:shadow-glow">
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold text-black/90 dark:text-white/90">{t("home.title")}</h2>
+          <p className="text-sm text-black/70 dark:text-white/70">{t("home.subtitle")}</p>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-[1fr_200px]">
+          <label className="space-y-2">
+            <span className="text-xs text-black/60 dark:text-white/60">{t("home.promptLabel")}</span>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={t("home.promptPlaceholder")}
+              className="min-h-[96px] w-full resize-none rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-black/90 outline-none placeholder:text-black/40 focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:placeholder:text-white/35 dark:focus:border-white/25"
+            />
+          </label>
+
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-1">
+              <label className="space-y-2">
+                <span className="text-xs text-black/60 dark:text-white/60">{t("home.modeLabel")}</span>
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value as Mode)}
+                  className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
+                >
+                  {MODES.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {t(m.labelKey)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-xs text-black/60 dark:text-white/60">{t("home.moodLabel")}</span>
+                <select
+                  value={mood}
+                  onChange={(e) => setMood(e.target.value as Mood)}
+                  className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
+                >
+                  {MOODS.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {t(m.labelKey)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label className="space-y-2">
+              <span className="text-xs text-black/60 dark:text-white/60">{t("home.weatherLabel")}</span>
+              <select
+                value={weatherOverride}
+                onChange={(e) => setWeatherOverride(e.target.value as WeatherOverride)}
+                className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
+              >
+                {WEATHER.map((w) => (
+                  <option key={w.value} value={w.value}>
+                    {t(w.labelKey)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              onClick={() => void generate()}
+              disabled={loading}
+              className="h-10 w-full rounded-2xl bg-[#F97316] px-4 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(249,115,22,0.25)] transition duration-100 hover:scale-[1.01] hover:bg-[#fb8531] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? t("home.loading") : t("home.generate")}
+            </button>
+
+            <div className="text-[11px] text-black/55 dark:text-white/55">{t("home.hint")}</div>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-6">
+        {error ? (
+          <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>
+        ) : null}
+
+        {data ? (
+          <ResultView data={data} clientApiMs={clientApiMs ?? undefined} streaming />
+        ) : (
+          <div className="rounded-3xl border border-black/10 bg-white/45 p-6 backdrop-blur dark:border-white/10 dark:bg-black/20">
+            <div className="h-5 w-44 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+            <div className="mt-4 space-y-2">
+              <div className="h-4 w-full animate-pulse rounded bg-black/10 dark:bg-white/10" />
+              <div className="h-4 w-5/6 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+              <div className="h-4 w-4/6 animate-pulse rounded bg-black/10 dark:bg-white/10" />
+            </div>
+          </div>
+        )}
+      </section>
+
+      {debugOpen && data ? (
+        <DebugPanel data={data} clientApiMs={clientApiMs ?? undefined} onClose={() => setDebugOpen(false)} />
+      ) : null}
+    </div>
+  );
+}

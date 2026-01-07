@@ -1,4 +1,4 @@
-export type GeoSource = "headers" | "ip_api" | "share" | "unknown";
+export type GeoSource = "headers" | "ip_api" | "geolocation" | "share" | "unknown";
 
 export type LocationInfo = {
   city: string | null;
@@ -20,6 +20,8 @@ export type WeatherInfo = {
 };
 
 export type GenerateMode = "oracle" | "travel" | "calm" | "focus" | "card";
+export type Mood = "auto" | "happy" | "anxious";
+export type WeatherOverride = "auto" | "clear" | "rain";
 
 export type VisualInfo = {
   seed: string;
@@ -81,6 +83,8 @@ export type GenerateResponse = {
   prompt: string;
   lang: string;
   mode?: GenerateMode;
+  mood?: Mood;
+  weatherOverride?: WeatherOverride;
   location: LocationInfo;
   weather: WeatherInfo;
   edge: EdgeInfo;
