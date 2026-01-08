@@ -104,6 +104,16 @@ function useEffectiveLang() {
 
 type Coords = { latitude: number; longitude: number };
 
+// NDJSON stream frames emitted by /api/generate?stream=1 (edge/index.js).
+// - meta: lets the UI render the result card before any token arrives.
+// - token: incremental delta, appended to content.text for a ChatGPT-like typing effect.
+// - done: the final full GenerateResponse, also persisted into KV + memory cache.
+type GenerateStreamFrame =
+  | { type: "meta"; data: GenerateResponse }
+  | { type: "token"; data: string }
+  | { type: "done"; data: GenerateResponse }
+  | { type: "error"; error: string };
+
 function hexToRgbTriplet(hex: string): string | null {
   const raw = String(hex || "").trim().replace(/^#/, "");
   if (raw.length !== 6) return null;
@@ -154,8 +164,10 @@ export default function OraclePage() {
   const [clientApiMs, setClientApiMs] = useState<number | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState<boolean>(false);
 
   const lastReq = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!effectiveLang) return;
@@ -176,10 +188,64 @@ export default function OraclePage() {
     if (rgb) root.style.setProperty("--esa-accent-rgb", rgb);
   }, [data?.visual?.palette]);
 
+  const readNdjsonStream = async (
+    res: Response,
+    opts: {
+      reqId: number;
+      onMeta: (data: GenerateResponse) => void;
+      onToken: (delta: string) => void;
+      onDone: (data: GenerateResponse) => void;
+      onError: (message: string) => void;
+    }
+  ) => {
+    if (!res.body) throw new Error("Stream body is empty");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    const handle = (rawLine: string) => {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      let frame: GenerateStreamFrame | null = null;
+      try {
+        frame = JSON.parse(line) as GenerateStreamFrame;
+      } catch {
+        return;
+      }
+
+      if (opts.reqId !== lastReq.current) return;
+
+      if (frame?.type === "meta" && frame.data) return opts.onMeta(frame.data);
+      if (frame?.type === "token" && typeof frame.data === "string") return opts.onToken(frame.data);
+      if (frame?.type === "done" && frame.data) return opts.onDone(frame.data);
+      if (frame?.type === "error") return opts.onError(String((frame as any).error ?? "Unknown stream error"));
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop() ?? "";
+      for (const line of lines) handle(line);
+    }
+
+    if (buf) handle(buf);
+  };
+
   const generate = async (opts?: { auto?: boolean }) => {
     const reqId = ++lastReq.current;
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+
     setLoading(true);
+    setStreaming(false);
     setError(null);
+    setClientApiMs(null);
+    setData(null);
 
     const moodTextValue = mood === "custom" ? moodText.trim() : "";
     const moodValue = mood === "custom" && !moodTextValue ? "neutral" : mood;
@@ -193,11 +259,13 @@ export default function OraclePage() {
       if (moodValue === "custom" && moodTextValue) url.searchParams.set("moodText", moodTextValue);
       url.searchParams.set("weather", weatherOverride);
       url.searchParams.set("prompt", prompt.trim());
+      url.searchParams.set("stream", "1");
       if (opts?.auto) url.searchParams.set("auto", "1");
 
       const res = await fetch(url, {
         method: coords ? "POST" : "GET",
         cache: "no-store",
+        signal: abortRef.current.signal,
         headers: coords ? { "Content-Type": "application/json" } : undefined,
         body: coords
           ? JSON.stringify({
@@ -215,11 +283,50 @@ export default function OraclePage() {
       if (reqId !== lastReq.current) return;
 
       if (!res.ok) throw new Error(await res.text());
+
+      const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+      if (ct.includes("application/x-ndjson")) {
+        setStreaming(true);
+
+        await readNdjsonStream(res, {
+          reqId,
+          onMeta: (next) => setData(next),
+          onToken: (delta) =>
+            setData((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                content: { ...prev.content, text: (prev.content.text ?? "") + delta }
+              };
+            }),
+          onDone: (final) => {
+            setClientApiMs(Math.round(performance.now() - started));
+            setData(final);
+            setStreaming(false);
+            setLoading(false);
+          },
+          onError: (message) => {
+            setError(message);
+            setStreaming(false);
+            setLoading(false);
+          }
+        });
+
+        // If the stream ends without a final frame, keep loading state consistent.
+        if (reqId === lastReq.current) {
+          setClientApiMs(Math.round(performance.now() - started));
+          setStreaming(false);
+        }
+        return;
+      }
+
+      // Fallback: non-streaming JSON (still supported by the edge handler).
       const json = (await res.json()) as GenerateResponse;
       setClientApiMs(Math.round(performance.now() - started));
       setData(json);
     } catch (e) {
       if (reqId !== lastReq.current) return;
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (reqId === lastReq.current) setLoading(false);
@@ -365,7 +472,7 @@ export default function OraclePage() {
         ) : null}
 
         {data ? (
-          <ResultView data={data} clientApiMs={clientApiMs ?? undefined} streaming />
+          <ResultView data={data} clientApiMs={clientApiMs ?? undefined} streaming={streaming} />
         ) : (
           <div className="rounded-3xl border border-black/10 bg-white/45 p-6 backdrop-blur dark:border-white/10 dark:bg-black/20">
             <div className="h-5 w-44 animate-pulse rounded bg-black/10 dark:bg-white/10" />

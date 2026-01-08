@@ -24,10 +24,40 @@ export default function DebugPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const isZh = (data.lang || "").toLowerCase().startsWith("zh");
 
   const networkOverheadMs =
     typeof clientApiMs === "number" ? Math.max(0, Math.round(clientApiMs - data.timing.totalMs)) : null;
   const edgeEndToEndMs = typeof clientApiMs === "number" ? clientApiMs : data.timing.totalMs;
+
+  // Multi-level cache display (kv.txt): memory / KV / realtime generate.
+  const cacheLayerLabel = (() => {
+    const layer = data.cache.layer ?? (data.cache.hit ? "unknown" : "generate");
+    const ms =
+      typeof data.cache.layerMs === "number" && Number.isFinite(data.cache.layerMs)
+        ? `${Math.max(0, Math.round(data.cache.layerMs))}ms`
+        : null;
+
+    if (isZh) {
+      if (data.cache.hit && layer === "memory") return `内存命中${ms ? ` (${ms})` : ""}`;
+      if (data.cache.hit && layer === "kv") return `KV命中${ms ? ` (${ms})` : ""}`;
+      if (!data.cache.hit) return `实时生成${ms ? ` (${ms})` : ""}`;
+      return `命中${ms ? ` (${ms})` : ""}`;
+    }
+
+    if (data.cache.hit && layer === "memory") return `memory hit${ms ? ` (${ms})` : ""}`;
+    if (data.cache.hit && layer === "kv") return `KV hit${ms ? ` (${ms})` : ""}`;
+    if (!data.cache.hit) return `generated live${ms ? ` (${ms})` : ""}`;
+    return `hit${ms ? ` (${ms})` : ""}`;
+  })();
+
+  const popLine = (() => {
+    const name = data.edge.pop?.city;
+    if (!name) return null;
+    const km = data.edge.pop?.distanceKm;
+    if (typeof km === "number" && Number.isFinite(km)) return isZh ? `${name} · 约${Math.round(km)}km` : `${name} · ~${Math.round(km)}km`;
+    return name;
+  })();
 
   const statBars = useMemo(() => {
     if (!data.stats) return null;
@@ -66,7 +96,7 @@ export default function DebugPanel({
           <div className="rounded-2xl border border-black/10 bg-white/70 p-3 dark:border-white/10 dark:bg-black/30">
             <div className="text-[11px] text-black/60 dark:text-white/60">{t("result.cache")}</div>
             <div className="mt-1 text-sm font-semibold text-black/90 dark:text-white/90">
-              {data.cache.hit ? t("result.cache.hit") : t("result.cache.miss")}
+              {cacheLayerLabel}
             </div>
             <div className="mt-1 text-[11px] text-black/55 dark:text-white/55">
               TTL {t("result.ttlValue", { minutes: Math.round(data.cache.ttlMs / 60000) })}
@@ -76,7 +106,10 @@ export default function DebugPanel({
           <div className="rounded-2xl border border-black/10 bg-white/70 p-3 dark:border-white/10 dark:bg-black/30">
             <div className="text-[11px] text-black/60 dark:text-white/60">EDGE</div>
             <div className="mt-1 text-sm font-semibold text-black/90 dark:text-white/90">{data.edge.node}</div>
-            <div className="mt-1 text-[11px] text-black/55 dark:text-white/55">{data.edge.provider}</div>
+            <div className="mt-1 text-[11px] text-black/55 dark:text-white/55">
+              {data.edge.provider}
+              {popLine ? ` · ${popLine}` : ""}
+            </div>
           </div>
         </div>
 
@@ -127,4 +160,3 @@ export default function DebugPanel({
     </motion.aside>
   );
 }
-

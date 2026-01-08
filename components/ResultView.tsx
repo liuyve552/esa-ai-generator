@@ -84,40 +84,12 @@ function WeatherGlyph({ kind }: { kind: WeatherKind }) {
   );
 }
 
-function useStreamedText(text: string, enabled: boolean) {
-  const [visible, setVisible] = useState(enabled ? "" : text);
-  const [done, setDone] = useState(!enabled);
-
-  useEffect(() => {
-    if (!enabled) {
-      setVisible(text);
-      setDone(true);
-      return;
-    }
-
-    let i = 0;
-    setVisible("");
-    setDone(false);
-
-    const tickMs = 28;
-    const charsPerTick = Math.max(2, Math.round((240 * tickMs) / 1000));
-    const timer = setInterval(() => {
-      i = Math.min(text.length, i + charsPerTick);
-      setVisible(text.slice(0, i));
-      if (i >= text.length) {
-        clearInterval(timer);
-        setDone(true);
-      }
-    }, tickMs);
-
-    return () => clearInterval(timer);
-  }, [text, enabled]);
-
-  return { visible, done };
-}
-
 function toReadablePlace(location: GenerateResponse["location"], fallback: string) {
   return [location.city, location.country].filter((v): v is string => typeof v === "string" && v.length > 0).join(", ") || fallback;
+}
+
+function formatMs(ms: number | null | undefined) {
+  return typeof ms === "number" && Number.isFinite(ms) ? `${Math.max(0, Math.round(ms))}ms` : null;
 }
 
 export default function ResultView(props: {
@@ -135,7 +107,7 @@ export default function ResultView(props: {
   const [taskState, setTaskState] = useState<Record<string, boolean>>({});
 
   const streamingEnabled = streaming === true;
-  const { visible: streamedText, done: streamDone } = useStreamedText(data.content.text || "", streamingEnabled);
+  const renderedText = data.content.text || "";
 
   const formatTemp = (value: number | null | undefined) => {
     if (typeof value !== "number" || Number.isNaN(value)) return t("common.na");
@@ -147,6 +119,7 @@ export default function ResultView(props: {
   const scenarioLabel = t(`mode.${scenarioKey}`, { defaultValue: scenarioKey });
 
   const weatherKind = pickWeatherKind(data.weather.weatherCode);
+  const isZh = (data.lang || "").toLowerCase().startsWith("zh");
 
   useEffect(() => {
     const root = document.documentElement;
@@ -181,9 +154,56 @@ export default function ResultView(props: {
   const weatherSummary = useMemo(() => {
     const desc = data.weather.description || t("common.unknown");
     const temp = formatTemp(data.weather.temperatureC);
-    const isZh = (data.lang || "").toLowerCase().startsWith("zh");
     return isZh ? `${desc}\uff0c${temp}` : `${desc}, ${temp}`;
-  }, [data.lang, data.weather.description, data.weather.temperatureC, t]);
+  }, [data.weather.description, data.weather.temperatureC, formatTemp, isZh, t]);
+
+  // Cache layer badge (kv.txt):
+  // “缓存命中：内存 (0ms)” / “缓存命中：KV (12ms)” / “实时生成 (1281ms)”
+  const cacheBadge = useMemo(() => {
+    const layer = data.cache.layer ?? (data.cache.hit ? "unknown" : "generate");
+    const ms = formatMs(data.cache.layerMs);
+
+    if (isZh) {
+      if (data.cache.hit && layer === "memory") return `缓存命中：内存${ms ? ` (${ms})` : ""}`;
+      if (data.cache.hit && layer === "kv") return `缓存命中：KV${ms ? ` (${ms})` : ""}`;
+      if (data.cache.hit && layer === "edge") return `缓存命中：Edge${ms ? ` (${ms})` : ""}`;
+      if (!data.cache.hit) return `实时生成${ms ? ` (${ms})` : ""}`;
+      return `缓存命中${ms ? ` (${ms})` : ""}`;
+    }
+
+    if (data.cache.hit && layer === "memory") return `Cache: memory${ms ? ` (${ms})` : ""}`;
+    if (data.cache.hit && layer === "kv") return `Cache: KV${ms ? ` (${ms})` : ""}`;
+    if (data.cache.hit && layer === "edge") return `Cache: edge${ms ? ` (${ms})` : ""}`;
+    if (!data.cache.hit) return `Live generation${ms ? ` (${ms})` : ""}`;
+    return `Cache${ms ? ` (${ms})` : ""}`;
+  }, [data.cache.hit, data.cache.layer, data.cache.layerMs, isZh]);
+
+  // Global POP node badge (kv.txt): "由香港节点提供服务 · 距离约50km · 边缘延迟170ms"
+  const popBadge = useMemo(() => {
+    const popName =
+      data.edge.pop?.city || (data.edge.node && data.edge.node !== "near-user" ? String(data.edge.node) : null);
+    if (!popName) return null;
+
+    const parts: string[] = [];
+    parts.push(isZh ? `由${popName}节点提供服务` : `Served by ${popName}`);
+
+    const distanceKm = data.edge.pop?.distanceKm;
+    if (typeof distanceKm === "number" && Number.isFinite(distanceKm)) {
+      parts.push(isZh ? `距离约${Math.round(distanceKm)}km` : `~${Math.round(distanceKm)}km away`);
+    }
+
+    const edgeLatencyMs =
+      typeof props.clientApiMs === "number"
+        ? props.clientApiMs
+        : !streamingEnabled
+          ? data.timing.totalMs
+          : null;
+    if (typeof edgeLatencyMs === "number" && Number.isFinite(edgeLatencyMs)) {
+      parts.push(isZh ? `边缘延迟${Math.round(edgeLatencyMs)}ms` : `Edge latency ${Math.round(edgeLatencyMs)}ms`);
+    }
+
+    return parts.join(" \u00b7 ");
+  }, [data.edge.node, data.edge.pop?.city, data.edge.pop?.distanceKm, data.timing.totalMs, isZh, props.clientApiMs, streamingEnabled]);
 
   const shareUrl = useMemo(() => {
     const origin = globalThis.location?.origin ?? "";
@@ -329,8 +349,8 @@ export default function ResultView(props: {
 
           <div className="mt-6 rounded-2xl border border-white/10 bg-black/25 p-4">
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-white/90">
-              {streamedText}
-              {streamingEnabled && !streamDone ? (
+              {renderedText}
+              {streamingEnabled ? (
                 <motion.span
                   aria-hidden
                   className="ml-1 inline-block h-[1.05em] w-[2px] translate-y-[2px] bg-[#F97316]/90"
@@ -339,6 +359,19 @@ export default function ResultView(props: {
                 />
               ) : null}
             </p>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {cacheBadge ? (
+              <span className="inline-flex items-center rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[11px] text-white/70">
+                {cacheBadge}
+              </span>
+            ) : null}
+            {popBadge ? (
+              <span className="inline-flex items-center rounded-full border border-white/10 bg-black/30 px-3 py-1 text-[11px] text-white/70">
+                {popBadge}
+              </span>
+            ) : null}
           </div>
 
           <motion.div

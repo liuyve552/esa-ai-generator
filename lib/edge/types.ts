@@ -47,16 +47,30 @@ export type StatsInfo = {
   todayCity: number;
 };
 
+export type EdgePopInfo = {
+  code: string | null;
+  city: string | null;
+  distanceKm: number | null;
+};
+
 export type EdgeInfo = {
   provider: string;
   node: string;
   requestId: string | null;
+  // Global POP display (kv.txt): best-effort info derived from Request.cf.colo / ESA headers.
+  pop?: EdgePopInfo | null;
 };
+
+export type CacheLayer = "memory" | "kv" | "edge" | "generate" | "unknown";
 
 export type CacheInfo = {
   hit: boolean;
   ttlMs: number;
   key: string;
+  // Multi-level cache layer (kv.txt): memory / KV / realtime generate.
+  layer?: CacheLayer;
+  // Time spent in the hit layer (ms), or null when not applicable (e.g. stream meta).
+  layerMs?: number | null;
 };
 
 export type ContentInfo = {

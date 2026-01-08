@@ -2,6 +2,11 @@
 // Serves /api/* while static assets are served from ./out
 
 const DEFAULT_TTL_MS = 8 * 60 * 1000;
+// Multi-level KV cache TTL (86400s). Refreshes daily by design (kv.txt).
+const GEN_TTL_MS = 24 * 60 * 60 * 1000;
+// KV bindings (kv.txt):
+// - ESA: uses global EdgeKV({ namespace: KV_NAMESPACE })
+// - Cloudflare/Workers: bind a KV namespace to env.GEN_KV
 const KV_NAMESPACE = "esa-ai-generator";
 const SUPPORTED_MODES = new Set(["oracle", "travel", "focus", "calm", "card"]);
 const SUPPORTED_MOODS = new Set(["auto", "happy", "calm", "neutral", "anxious", "tired", "custom"]);
@@ -170,6 +175,89 @@ async function sha256Base64Url(input) {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+// -----------------------------
+// Multi-level KV Cache (kv.txt)
+// -----------------------------
+// L1: in-memory Map (fastest, ~0ms)
+// L2: KV (ESA EdgeKV / Cloudflare KV), TTL = 86400s (daily)
+// L3: fallback realtime generation
+function getGenMem() {
+  const g = globalThis;
+  if (!g.__GEN_MEM_CACHE) g.__GEN_MEM_CACHE = new Map();
+  return g.__GEN_MEM_CACHE;
+}
+
+function genMemGet(key) {
+  const mem = getGenMem();
+  const entry = mem.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    mem.delete(key);
+    return null;
+  }
+  return entry.value ?? null;
+}
+
+function genMemPut(key, value, ttlMs) {
+  getGenMem().set(key, { expiresAt: Date.now() + ttlMs, value });
+}
+
+function getGenKv(env) {
+  // Cloudflare Workers style: bind a KV namespace to env.GEN_KV.
+  // ESA EdgeKV style: EdgeKV is a global constructor (no env binding required).
+  try {
+    const kv = env?.GEN_KV;
+    if (kv && typeof kv.get === "function" && typeof kv.put === "function") return kv;
+  } catch {
+    // ignore
+  }
+
+  return getKv();
+}
+
+async function kvGetValidPayload(kv, key) {
+  const envelope = await kvGetJson(kv, key);
+  if (!envelope || typeof envelope !== "object") return null;
+  if (typeof envelope.expiresAt === "number" && Date.now() > envelope.expiresAt) return null;
+  return envelope.payload ?? null;
+}
+
+async function kvPutPayload(kv, key, payload, ttlMs) {
+  const ttlSeconds = Math.max(1, Math.round(ttlMs / 1000));
+  const envelope = { expiresAt: Date.now() + ttlMs, payload };
+  try {
+    // Cloudflare KV supports { expirationTtl }.
+    await kv.put(key, JSON.stringify(envelope), { expirationTtl: ttlSeconds });
+    return true;
+  } catch {
+    // ESA EdgeKV may not support options; embed expiresAt for daily expiry.
+    return await kvPutJson(kv, key, envelope);
+  }
+}
+
+function normalizeCityKey(city) {
+  const v = String(city || "").trim();
+  if (!v) return "unknown";
+  return v.replace(/\s+/g, "-").replace(/[|]/g, "-").slice(0, 40);
+}
+
+async function computeMoodHash({ mood, moodText, prompt, lang }) {
+  // moodHash is intentionally short to keep the KV key readable.
+  // kv.txt mandates the *key skeleton*:
+  //   key = ${mode}-${city}-${weatherCode}-${moodHash}-${dateSlice}
+  // We keep this skeleton, and define moodHash as a compact hash of "mood config",
+  // including prompt/lang to avoid cross-language / cross-prompt cache collisions.
+  const sig = `${normalizeMood(mood)}|${normalizeMoodText(moodText) || ""}|${String(prompt || "")}|${normalizeLang(lang)}`;
+  const full = await sha256Base64Url(sig);
+  return full.slice(0, 12);
+}
+
+async function genCacheKey({ mode, city, weatherCode, mood, moodText, prompt, lang, dateSlice }) {
+  const moodHash = await computeMoodHash({ mood, moodText, prompt, lang });
+  const w = typeof weatherCode === "number" ? String(weatherCode) : String(weatherCode ?? "x");
+  return `${normalizeMode(mode)}-${normalizeCityKey(city)}-${w}-${moodHash}-${dateSlice}`;
 }
 
 function base64UrlEncodeUtf8(str) {
@@ -364,7 +452,6 @@ async function replayFromD(d, request) {
   if (!spec) return json({ error: "Invalid share payload" }, { status: 400 });
 
   const started = nowMs();
-  const edge = getEdgeInfo(request.headers);
 
   const id = await computeShareIdFromCore(spec);
   const views = await getViewCount(id);
@@ -378,6 +465,7 @@ async function replayFromD(d, request) {
     ip: null,
     source: "share"
   };
+  const edge = getEdgeInfo(request, spec.lang, location);
 
   const palette = pickPalette({ mode: spec.mode, weatherCode: spec.weather.weatherCode, isDay: spec.weather.isDay });
   const daily = makeDaily({ mode: spec.mode, mood, moodText, lang: spec.lang, location, weather: spec.weather, palette });
@@ -385,15 +473,16 @@ async function replayFromD(d, request) {
   const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
   const stats = makeStats({ lang: spec.lang, location, weather: spec.weather, mode: spec.mode });
 
-  const locLabel = `${location.city || "unknown"}-${location.country || "unknown"}-${(location.latitude || 0).toFixed(2)}-${(location.longitude || 0).toFixed(2)}`;
-  const key = await cacheKeyFor({
-    prompt: spec.prompt,
-    lang: spec.lang,
+  const dateSlice = daily.date || localDateKey(spec.weather);
+  const key = await genCacheKey({
     mode: spec.mode,
+    city: location.city,
+    weatherCode: spec.weather.weatherCode,
     mood,
     moodText,
-    weatherOverride,
-    location: locLabel
+    prompt: spec.prompt,
+    lang: spec.lang,
+    dateSlice
   });
 
   return json({
@@ -406,7 +495,7 @@ async function replayFromD(d, request) {
     location,
     weather: spec.weather,
     edge,
-    cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
+    cache: { hit: true, ttlMs: GEN_TTL_MS, key, layer: "kv", layerMs: 0 },
     content: spec.content,
     share: { id, url: buildShareUrl(id, d), views },
     timing: {
@@ -587,6 +676,125 @@ async function generateWithQwen({ apiKey, model, messages }) {
     throw new Error(`DashScope invalid response: ${json?.code ?? ""} ${json?.message ?? ""}`.trim());
   }
   return { text: choiceText.trim(), model };
+}
+
+// Edge Functions Streaming (kv.txt)
+// - Prefer native Response streaming (ReadableStream)
+// - Try SSE streaming from DashScope when available; fallback to non-stream JSON.
+async function generateWithQwenStream({ apiKey, model, messages, onToken }) {
+  const res = await fetch("https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "text/event-stream"
+    },
+    body: JSON.stringify({
+      model,
+      input: { messages },
+      // DashScope may support streaming via these flags (kept defensive for compatibility).
+      stream: true,
+      parameters: { temperature: 0.8, top_p: 0.9, result_format: "message", incremental_output: true }
+    })
+  });
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error(`DashScope error: ${res.status} ${err}`);
+  }
+
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  if (!res.body || !ct.includes("text/event-stream")) {
+    // Fallback: non-stream JSON response
+    const json = await res.json().catch(() => null);
+    const choiceText =
+      json?.output?.choices?.[0]?.message?.content ??
+      json?.output?.choices?.[0]?.text ??
+      json?.output?.text ??
+      null;
+    if (!choiceText || typeof choiceText !== "string") {
+      throw new Error(`DashScope invalid response: ${json?.code ?? ""} ${json?.message ?? ""}`.trim());
+    }
+    const text = choiceText.trim();
+    if (typeof onToken === "function" && text) onToken(text);
+    return { text, model };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let dataLines = [];
+  let assembled = "";
+  let lastFull = "";
+
+  const extractText = (obj) =>
+    obj?.output?.choices?.[0]?.delta?.content ??
+    obj?.output?.choices?.[0]?.message?.content ??
+    obj?.output?.choices?.[0]?.text ??
+    obj?.output?.text ??
+    null;
+
+  const emit = (chunkText) => {
+    if (typeof chunkText !== "string" || !chunkText) return;
+
+    // If upstream sends the full text each time, compute a delta; otherwise treat as delta.
+    let delta = chunkText;
+    if (chunkText.startsWith(lastFull) && chunkText.length >= lastFull.length) {
+      delta = chunkText.slice(lastFull.length);
+      lastFull = chunkText;
+      assembled += delta;
+    } else {
+      assembled += chunkText;
+      lastFull = assembled;
+    }
+
+    if (typeof onToken === "function" && delta) onToken(delta);
+  };
+
+  const flushEvent = () => {
+    const raw = dataLines.join("\n").trim();
+    dataLines = [];
+    if (!raw) return;
+    if (raw === "[DONE]") return;
+    try {
+      const obj = JSON.parse(raw);
+      const maybeText = extractText(obj);
+      if (typeof maybeText === "string") emit(maybeText);
+    } catch {
+      // ignore non-JSON SSE frames
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line) {
+        flushEvent();
+        continue;
+      }
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  if (buf) {
+    // Process any trailing event (best-effort).
+    const lines = buf.split(/\r?\n/);
+    for (const line of lines) {
+      if (!line) {
+        flushEvent();
+        continue;
+      }
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    }
+    flushEvent();
+  }
+
+  return { text: String(lastFull || assembled || "").trim(), model };
 }
 
 function simulateOriginMs(edgeComputeMs, cacheHit) {
@@ -929,30 +1137,99 @@ function mockGenerate({ prompt, mode, location, weather, lang, daily }) {
   ].join("\n");
 }
 
-function getEdgeInfo(headers) {
-  const esa = headers.get("x-esa-edge-location") || headers.get("x-esa-region") || null;
-  if (esa) return { provider: "ESA Edge", node: esa, requestId: null };
+// -----------------------------
+// Global POP Node Display (kv.txt)
+// -----------------------------
+const POPS = {
+  HKG: { zh: "香港", en: "Hong Kong", lat: 22.3193, lon: 114.1694 },
+  SIN: { zh: "新加坡", en: "Singapore", lat: 1.3521, lon: 103.8198 },
+  LAX: { zh: "洛杉矶", en: "Los Angeles", lat: 34.0522, lon: -118.2437 },
+  SFO: { zh: "旧金山", en: "San Francisco", lat: 37.7749, lon: -122.4194 },
+  NRT: { zh: "东京", en: "Tokyo", lat: 35.6762, lon: 139.6503 },
+  FRA: { zh: "法兰克福", en: "Frankfurt", lat: 50.1109, lon: 8.6821 },
+  IAD: { zh: "弗吉尼亚", en: "Virginia", lat: 37.4316, lon: -78.6569 }
+};
 
-  const cfRay = headers.get("cf-ray");
-  if (cfRay) {
-    const parts = cfRay.split("-");
-    const colo = parts[1] || "Cloudflare";
-    return { provider: "Cloudflare Edge", node: colo, requestId: cfRay };
-  }
-
-  return { provider: "Edge", node: "near-user", requestId: null };
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = (x) => (x * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
-async function cacheKeyFor({ prompt, lang, mode, mood, moodText, weatherOverride, location }) {
-  const buf = new TextEncoder().encode(
-    `${normalizeLang(lang)}|${normalizeMode(mode)}|${normalizeMood(mood)}|${normalizeMoodText(moodText) || ""}|${normalizeWeatherOverride(weatherOverride)}|${location}|${prompt}`
-  );
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  const bytes = new Uint8Array(digest);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-  return `https://edge-cache.local/gen/${b64}`;
+function guessPopCodeFromEsaNode(raw) {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  const up = v.toUpperCase();
+  if (/^[A-Z]{3}$/.test(up)) return up;
+  const lower = v.toLowerCase();
+  if (lower.includes("hongkong") || lower.includes("hong-kong") || lower.includes("hk")) return "HKG";
+  if (lower.includes("singapore") || lower.includes("sg")) return "SIN";
+  if (lower.includes("losangeles") || lower.includes("lax")) return "LAX";
+  if (lower.includes("sanfrancisco") || lower.includes("sfo")) return "SFO";
+  if (lower.includes("tokyo") || lower.includes("nrt")) return "NRT";
+  if (lower.includes("frankfurt") || lower.includes("fra")) return "FRA";
+  if (lower.includes("virginia") || lower.includes("iad")) return "IAD";
+  return null;
+}
+
+function popLabel(code, lang) {
+  const spec = POPS[code];
+  if (!spec) return code;
+  return isZhLang(lang) ? spec.zh : spec.en;
+}
+
+function getEdgeInfo(request, lang, location) {
+  const headers = request.headers;
+  const cfRay = headers.get("cf-ray") || null;
+  const cfColo = request?.cf && typeof request.cf.colo === "string" ? request.cf.colo : null;
+  const esaNode = headers.get("x-esa-node") || headers.get("x-esa-edge-location") || headers.get("x-esa-region") || null;
+
+  let provider = "Edge";
+  let node = "near-user";
+  let requestId = null;
+  let popCode = null;
+
+  if (cfColo) {
+    provider = "Cloudflare Edge";
+    node = cfColo;
+    popCode = String(cfColo).toUpperCase();
+    requestId = cfRay;
+  } else if (esaNode) {
+    provider = "ESA Edge";
+    node = esaNode;
+    popCode = guessPopCodeFromEsaNode(esaNode);
+  } else if (cfRay) {
+    const parts = cfRay.split("-");
+    const colo = parts[1] || "Cloudflare";
+    provider = "Cloudflare Edge";
+    node = colo;
+    popCode = String(colo).toUpperCase();
+    requestId = cfRay;
+  }
+
+  const city = popCode ? popLabel(popCode, lang) : null;
+  const pop = popCode && POPS[popCode] ? POPS[popCode] : null;
+  const distanceKm =
+    pop &&
+    typeof location?.latitude === "number" &&
+    typeof location?.longitude === "number" &&
+    Number.isFinite(location.latitude) &&
+    Number.isFinite(location.longitude)
+      ? Math.round(haversineKm(location.latitude, location.longitude, pop.lat, pop.lon))
+      : null;
+
+  return {
+    provider,
+    node,
+    requestId,
+    pop: { code: popCode, city, distanceKm }
+  };
 }
 
 function envGet(env, name) {
@@ -976,6 +1253,9 @@ function envGet(env, name) {
 
 async function handleGenerate(request, env) {
   const url = new URL(request.url);
+  const wantsStream = (url.searchParams.get("stream") || "").trim() === "1";
+
+  // Input parsing (GET query + optional POST JSON body).
   let prompt = (url.searchParams.get("prompt") || "").trim();
   let lang = normalizeLang((url.searchParams.get("lang") || "zh").trim() || "zh");
   let mode = normalizeMode((url.searchParams.get("mode") || "oracle").trim() || "oracle");
@@ -1003,11 +1283,291 @@ async function handleGenerate(request, env) {
 
   if (mood === "custom" && !moodText) mood = "neutral";
   if (mood !== "custom") moodText = null;
-
   if (!prompt) prompt = defaultPromptFor(mode, lang);
 
+  const apiKey = envGet(env, "DASHSCOPE_API_KEY");
+  const model = envGet(env, "AI_TEXT_MODEL") || "qwen-max";
+
+  const buildDerived = ({ location, weather }) => {
+    const palette = pickPalette({ mode, weatherCode: weather.weatherCode, isDay: weather.isDay });
+    const daily = makeDaily({ mode, mood, moodText, lang, location, weather, palette });
+    const visualSeed = `${daily.seed}|${prompt}`;
+    const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
+    const stats = makeStats({ lang, location, weather, mode });
+    return { daily, visual, stats };
+  };
+
+  // Streaming response path: Response(body=ReadableStream) with NDJSON frames.
+  if (wantsStream) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        const send = (obj) => {
+          try {
+            controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+          } catch {
+            // ignore (client closed)
+          }
+        };
+
+        const run = async () => {
+          const started = nowMs();
+
+          // 1) Geo (existing edge cache is kept for IP->city fallback)
+          const geoStart = nowMs();
+          const rawLocation = await detectLocation(request);
+          const location = {
+            ...rawLocation,
+            latitude: coords?.latitude ?? rawLocation.latitude,
+            longitude: coords?.longitude ?? rawLocation.longitude,
+            source: coords ? "geolocation" : rawLocation.source,
+            ip: null
+          };
+          const geoMs = Math.round(nowMs() - geoStart);
+
+          // 2) Edge POP info (Request.cf / ESA headers)
+          const edge = getEdgeInfo(request, lang, location);
+
+          // 3) Weather (cached 10min at edge)
+          const weatherStart = nowMs();
+          let weather =
+            location.latitude != null && location.longitude != null
+              ? await getWeather(location.latitude, location.longitude, lang)
+              : { temperatureC: null, weatherCode: null, description: describeWeather(null, lang), timezone: null, localTime: null, isDay: null };
+          weather = applyWeatherOverride(weather, weatherOverride, lang);
+          const weatherMs = Math.round(nowMs() - weatherStart);
+
+          // 4) Multi-level KV cache key (kv.txt)
+          const dateSlice = localDateKey(weather);
+          const key = await genCacheKey({
+            mode,
+            city: location.city,
+            weatherCode: weather.weatherCode,
+            mood,
+            moodText,
+            prompt,
+            lang,
+            dateSlice
+          });
+
+          // L1: memory Map
+          const memStart = nowMs();
+          const memPayload = genMemGet(key);
+          const memMs = Math.round(nowMs() - memStart);
+          if (memPayload) {
+            const derived = buildDerived({ location, weather });
+            const totalMs = Math.round(nowMs() - started);
+            const final = {
+              ...memPayload,
+              prompt,
+              lang,
+              mode,
+              mood,
+              moodText,
+              weatherOverride,
+              location,
+              weather,
+              edge,
+              cache: { hit: true, ttlMs: GEN_TTL_MS, key, layer: "memory", layerMs: memMs },
+              timing: {
+                totalMs,
+                geoMs,
+                weatherMs,
+                aiMs: 0,
+                originSimulatedMs: simulateOriginMs(totalMs, true)
+              },
+              ...derived
+            };
+            send({ type: "done", data: final });
+            return;
+          }
+
+          // L2: KV (ESA EdgeKV / Cloudflare KV)
+          const kv = getGenKv(env);
+          const kvStart = nowMs();
+          const kvPayload = kv ? await kvGetValidPayload(kv, key) : null;
+          const kvMs = Math.round(nowMs() - kvStart);
+          if (kvPayload) {
+            genMemPut(key, kvPayload, GEN_TTL_MS);
+            const derived = buildDerived({ location, weather });
+            const totalMs = Math.round(nowMs() - started);
+            const final = {
+              ...kvPayload,
+              prompt,
+              lang,
+              mode,
+              mood,
+              moodText,
+              weatherOverride,
+              location,
+              weather,
+              edge,
+              cache: { hit: true, ttlMs: GEN_TTL_MS, key, layer: "kv", layerMs: kvMs },
+              timing: {
+                totalMs,
+                geoMs,
+                weatherMs,
+                aiMs: 0,
+                originSimulatedMs: simulateOriginMs(totalMs, true)
+              },
+              ...derived
+            };
+            send({ type: "done", data: final });
+            return;
+          }
+
+          // L3: realtime generation (stream tokens to client)
+          const derived = buildDerived({ location, weather });
+          const generatedAt = new Date().toISOString();
+
+          // Meta frame: lets UI render the card immediately (before tokens arrive).
+          send({
+            type: "meta",
+            data: {
+              prompt,
+              lang,
+              mode,
+              mood,
+              moodText,
+              weatherOverride,
+              location,
+              weather,
+              edge,
+              cache: { hit: false, ttlMs: GEN_TTL_MS, key, layer: "generate", layerMs: null },
+              content: { text: "", model: apiKey ? model : "mock-template", mode: apiKey ? "qwen" : "mock" },
+              share: { id: null, url: null, views: null },
+              timing: {
+                totalMs: Math.round(nowMs() - started),
+                geoMs,
+                weatherMs,
+                aiMs: 0,
+                originSimulatedMs: simulateOriginMs(Math.round(nowMs() - started), false)
+              },
+              ...derived,
+              generatedAt
+            }
+          });
+
+          const sys = buildSystemPrompt(lang);
+          const user = buildUserPrompt({ prompt, mode, mood, moodText, weatherOverride, location, weather, lang });
+
+          let contentText = "";
+          let contentMode = "mock";
+          let usedModel = "mock-template";
+
+          const emitPseudoTokens = async (fullText) => {
+            const step = 18;
+            let buf = "";
+            for (const ch of String(fullText || "")) {
+              buf += ch;
+              if (buf.length >= step) {
+                send({ type: "token", data: buf });
+                buf = "";
+                await Promise.resolve();
+              }
+            }
+            if (buf) send({ type: "token", data: buf });
+          };
+
+          const aiStart = nowMs();
+          if (apiKey) {
+            try {
+              const out = await generateWithQwenStream({
+                apiKey,
+                model,
+                messages: [
+                  { role: "system", content: sys },
+                  { role: "user", content: user }
+                ],
+                onToken: (delta) => {
+                  if (!delta) return;
+                  contentText += delta;
+                  send({ type: "token", data: delta });
+                }
+              });
+              contentText = out.text || contentText;
+              usedModel = out.model;
+              contentMode = "qwen";
+            } catch {
+              const full = mockGenerate({ prompt, mode, location, weather, lang, daily: derived.daily });
+              contentText = full;
+              await emitPseudoTokens(full);
+              usedModel = "mock-template";
+              contentMode = "mock";
+            }
+          } else {
+            const full = mockGenerate({ prompt, mode, location, weather, lang, daily: derived.daily });
+            contentText = full;
+            await emitPseudoTokens(full);
+            usedModel = "mock-template";
+            contentMode = "mock";
+          }
+          const aiMs = Math.round(nowMs() - aiStart);
+
+          const totalMs = Math.round(nowMs() - started);
+
+          const result = {
+            prompt,
+            lang,
+            mode,
+            mood,
+            moodText,
+            weatherOverride,
+            location,
+            weather,
+            edge,
+            cache: { hit: false, ttlMs: GEN_TTL_MS, key, layer: "generate", layerMs: totalMs },
+            content: { text: String(contentText || "").trim(), model: usedModel, mode: contentMode },
+            share: { id: null, url: null, views: null },
+            timing: {
+              totalMs,
+              geoMs,
+              weatherMs,
+              aiMs,
+              originSimulatedMs: simulateOriginMs(totalMs, false)
+            },
+            ...derived,
+            generatedAt
+          };
+
+          // Persist full response to share + multi-level caches.
+          const shareId = await saveShare(result, DEFAULT_TTL_MS);
+          const views = await getViewCount(shareId);
+          const d = encodeShareDataForUrl({ ...result, share: { id: shareId } });
+          const shareUrl = d.length <= 6000 ? buildShareUrl(shareId, d) : buildShareUrl(shareId, null);
+          const final = { ...result, share: { id: shareId, url: shareUrl, views } };
+
+          genMemPut(key, final, GEN_TTL_MS);
+          if (kv) await kvPutPayload(kv, key, final, GEN_TTL_MS);
+
+          send({ type: "done", data: final });
+        };
+
+        run()
+          .catch((e) => {
+            const msg = e instanceof Error ? e.message : String(e);
+            send({ type: "error", error: msg });
+          })
+          .finally(() => {
+            try {
+              controller.close();
+            } catch {
+              // ignore
+            }
+          });
+      }
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-store"
+      }
+    });
+  }
+
+  // Non-stream path (JSON): same multi-level cache logic, but returns a single JSON payload.
   const started = nowMs();
-  const edge = getEdgeInfo(request.headers);
 
   const geoStart = nowMs();
   const rawLocation = await detectLocation(request);
@@ -1020,50 +1580,7 @@ async function handleGenerate(request, env) {
   };
   const geoMs = Math.round(nowMs() - geoStart);
 
-  const locLabel = `${location.city || "unknown"}-${location.country || "unknown"}-${(location.latitude || 0).toFixed(2)}-${(location.longitude || 0).toFixed(2)}`;
-  const key = await cacheKeyFor({ prompt, lang, mode, mood, moodText, weatherOverride, location: locLabel });
-
-  const cached = await edgeCacheGet(key);
-  if (cached.hit && cached.value) {
-    const base = cached.value;
-    const baseMood = base?.mood ?? mood;
-    const baseMoodText = baseMood === "custom" ? normalizeMoodText(base?.moodText ?? moodText) : null;
-    const baseWeatherOverride = base?.weatherOverride ?? weatherOverride;
-    const palette =
-      base?.visual?.palette || pickPalette({ mode, weatherCode: base?.weather?.weatherCode, isDay: base?.weather?.isDay });
-    const daily =
-      base?.daily ||
-      makeDaily({
-        mode,
-        mood: baseMood,
-        moodText: baseMoodText,
-        lang,
-        location: base?.location || location,
-        weather: base?.weather || {},
-        palette
-      });
-    const visualSeed = `${daily.seed || localDateKey(base?.weather)}|${base?.prompt || prompt}`;
-    const visual = base?.visual?.svg ? base.visual : { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
-    const stats = base?.stats || makeStats({ lang, location: base?.location || location, weather: base?.weather || {}, mode });
-    const enriched = { ...base, lang, mode, mood: baseMood, moodText: baseMoodText, weatherOverride: baseWeatherOverride, daily, visual, stats };
-
-    const shareId = await saveShare(enriched, DEFAULT_TTL_MS);
-    const views = await getViewCount(shareId);
-    const d = encodeShareDataForUrl({ ...enriched, share: { id: shareId } });
-    const shareUrl = d.length <= 6000 ? buildShareUrl(shareId, d) : buildShareUrl(shareId, null);
-    return json({
-      ...enriched,
-      cache: { hit: true, ttlMs: DEFAULT_TTL_MS, key },
-      share: { id: shareId, url: shareUrl, views },
-      timing: {
-        totalMs: Math.round(nowMs() - started),
-        geoMs,
-        weatherMs: 0,
-        aiMs: 0,
-        originSimulatedMs: simulateOriginMs(Math.round(nowMs() - started), true)
-      }
-    });
-  }
+  const edge = getEdgeInfo(request, lang, location);
 
   const weatherStart = nowMs();
   let weather =
@@ -1073,24 +1590,88 @@ async function handleGenerate(request, env) {
   weather = applyWeatherOverride(weather, weatherOverride, lang);
   const weatherMs = Math.round(nowMs() - weatherStart);
 
-  const palette = pickPalette({ mode, weatherCode: weather.weatherCode, isDay: weather.isDay });
-  const daily = makeDaily({ mode, mood, moodText, lang, location, weather, palette });
-  const visualSeed = `${daily.seed}|${prompt}`;
-  const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
-  const stats = makeStats({ lang, location, weather, mode });
+  const dateSlice = localDateKey(weather);
+  const key = await genCacheKey({
+    mode,
+    city: location.city,
+    weatherCode: weather.weatherCode,
+    mood,
+    moodText,
+    prompt,
+    lang,
+    dateSlice
+  });
+
+  const derived = buildDerived({ location, weather });
+
+  const memStart = nowMs();
+  const memPayload = genMemGet(key);
+  const memMs = Math.round(nowMs() - memStart);
+  if (memPayload) {
+    const totalMs = Math.round(nowMs() - started);
+    return json({
+      ...memPayload,
+      prompt,
+      lang,
+      mode,
+      mood,
+      moodText,
+      weatherOverride,
+      location,
+      weather,
+      edge,
+      cache: { hit: true, ttlMs: GEN_TTL_MS, key, layer: "memory", layerMs: memMs },
+      timing: {
+        totalMs,
+        geoMs,
+        weatherMs,
+        aiMs: 0,
+        originSimulatedMs: simulateOriginMs(totalMs, true)
+      },
+      ...derived
+    });
+  }
+
+  const kv = getGenKv(env);
+  const kvStart = nowMs();
+  const kvPayload = kv ? await kvGetValidPayload(kv, key) : null;
+  const kvMs = Math.round(nowMs() - kvStart);
+  if (kvPayload) {
+    genMemPut(key, kvPayload, GEN_TTL_MS);
+    const totalMs = Math.round(nowMs() - started);
+    return json({
+      ...kvPayload,
+      prompt,
+      lang,
+      mode,
+      mood,
+      moodText,
+      weatherOverride,
+      location,
+      weather,
+      edge,
+      cache: { hit: true, ttlMs: GEN_TTL_MS, key, layer: "kv", layerMs: kvMs },
+      timing: {
+        totalMs,
+        geoMs,
+        weatherMs,
+        aiMs: 0,
+        originSimulatedMs: simulateOriginMs(totalMs, true)
+      },
+      ...derived
+    });
+  }
+
+  const sys = buildSystemPrompt(lang);
+  const user = buildUserPrompt({ prompt, mode, mood, moodText, weatherOverride, location, weather, lang });
 
   const aiStart = nowMs();
-  const apiKey = envGet(env, "DASHSCOPE_API_KEY");
-  const model = envGet(env, "AI_TEXT_MODEL") || "qwen-max";
-
   let contentText;
   let contentMode = "mock";
   let usedModel = "mock-template";
 
   if (apiKey) {
     try {
-      const sys = buildSystemPrompt(lang);
-      const user = buildUserPrompt({ prompt, mode, mood, moodText, weatherOverride, location, weather, lang });
       const out = await generateWithQwen({
         apiKey,
         model,
@@ -1103,13 +1684,14 @@ async function handleGenerate(request, env) {
       usedModel = out.model;
       contentMode = "qwen";
     } catch {
-      contentText = mockGenerate({ prompt, mode, location, weather, lang, daily });
+      contentText = mockGenerate({ prompt, mode, location, weather, lang, daily: derived.daily });
     }
   } else {
-    contentText = mockGenerate({ prompt, mode, location, weather, lang, daily });
+    contentText = mockGenerate({ prompt, mode, location, weather, lang, daily: derived.daily });
   }
 
   const aiMs = Math.round(nowMs() - aiStart);
+  const totalMs = Math.round(nowMs() - started);
 
   const result = {
     prompt,
@@ -1121,23 +1703,19 @@ async function handleGenerate(request, env) {
     location,
     weather,
     edge,
-    cache: { hit: false, ttlMs: DEFAULT_TTL_MS, key },
-    content: { text: contentText, model: usedModel, mode: contentMode },
+    cache: { hit: false, ttlMs: GEN_TTL_MS, key, layer: "generate", layerMs: totalMs },
+    content: { text: String(contentText || "").trim(), model: usedModel, mode: contentMode },
     share: { id: null, url: null, views: null },
     timing: {
-      totalMs: Math.round(nowMs() - started),
+      totalMs,
       geoMs,
       weatherMs,
       aiMs,
-      originSimulatedMs: simulateOriginMs(Math.round(nowMs() - started), false)
+      originSimulatedMs: simulateOriginMs(totalMs, false)
     },
-    visual,
-    daily,
-    stats,
+    ...derived,
     generatedAt: new Date().toISOString()
   };
-
-  await edgeCachePut(key, result, DEFAULT_TTL_MS);
 
   const shareId = await saveShare(result, DEFAULT_TTL_MS);
   const views = await getViewCount(shareId);
@@ -1145,7 +1723,9 @@ async function handleGenerate(request, env) {
   const shareUrl = d.length <= 6000 ? buildShareUrl(shareId, d) : buildShareUrl(shareId, null);
   const final = { ...result, share: { id: shareId, url: shareUrl, views } };
 
-  await edgeCachePut(key, final, DEFAULT_TTL_MS);
+  genMemPut(key, final, GEN_TTL_MS);
+  if (kv) await kvPutPayload(kv, key, final, GEN_TTL_MS);
+
   return json(final);
 }
 
