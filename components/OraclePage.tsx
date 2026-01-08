@@ -1,6 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent
+} from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { GenerateResponse } from "@/lib/edge/types";
 import ResultView from "@/components/ResultView";
@@ -198,6 +207,7 @@ function FancySelect<T extends string>({
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
 
   const selectedIndex = useMemo(() => options.findIndex((o) => o.value === value), [options, value]);
   const selected = selectedIndex >= 0 ? options[selectedIndex] : options[0];
@@ -221,6 +231,58 @@ function FancySelect<T extends string>({
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
+
+  // Render the menu in a portal (fixed positioning) to avoid being clipped by
+  // parent stacking contexts / overflow containers (common in glassmorphism UIs).
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuStyle(null);
+      return;
+    }
+
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const btn = buttonRef.current;
+        if (!btn) return;
+
+        const rect = btn.getBoundingClientRect();
+        const viewportW = window.innerWidth || 0;
+        const viewportH = window.innerHeight || 0;
+        const margin = 10;
+        const maxMenuHeight = 288; // matches Tailwind max-h-72
+
+        const below = viewportH - rect.bottom - margin;
+        const above = rect.top - margin;
+        const placeAbove = below < 240 && above > below;
+        const maxHeight = Math.max(120, Math.min(maxMenuHeight, placeAbove ? above : below));
+
+        const left = Math.max(margin, Math.min(rect.left, viewportW - rect.width - margin));
+        const top = placeAbove ? Math.max(margin, rect.top - maxHeight - 8) : rect.bottom + 8;
+
+        setMenuStyle({
+          position: "fixed",
+          top,
+          left,
+          width: rect.width,
+          maxHeight,
+          zIndex: 9999
+        });
+      });
+    };
+
+    update();
+
+    const onWindowChange = () => update();
+    window.addEventListener("resize", onWindowChange);
+    window.addEventListener("scroll", onWindowChange, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", onWindowChange);
+      window.removeEventListener("scroll", onWindowChange, true);
+    };
+  }, [open, options.length]);
 
   const choose = (next: T) => {
     onChange(next);
@@ -269,7 +331,7 @@ function FancySelect<T extends string>({
   const buttonBase =
     "inline-flex w-full items-center justify-between gap-2 border border-black/10 bg-white/70 text-black/85 backdrop-blur transition hover:bg-white/80 focus:outline-none focus:ring-2 focus:ring-[#F97316]/35 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/12 dark:bg-black/30 dark:text-white/90 dark:hover:bg-black/40 dark:focus:ring-[#F97316]/45";
   const menuBase =
-    "absolute left-0 top-full z-50 mt-2 w-full max-h-72 overflow-auto rounded-2xl border border-black/10 bg-white/85 p-1 shadow-[0_18px_60px_rgba(0,0,0,0.18)] backdrop-blur dark:border-white/12 dark:bg-black/70 dark:shadow-[0_18px_60px_rgba(0,0,0,0.55)]";
+    "overflow-auto rounded-2xl border border-black/10 bg-white/85 p-1 shadow-[0_18px_60px_rgba(0,0,0,0.18)] backdrop-blur dark:border-white/12 dark:bg-black/70 dark:shadow-[0_18px_60px_rgba(0,0,0,0.55)]";
   const optionBase =
     "flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm text-black/90 transition hover:bg-black/5 active:bg-black/10 dark:text-white/90 dark:hover:bg-white/10 dark:active:bg-white/15";
 
@@ -289,28 +351,31 @@ function FancySelect<T extends string>({
         <ChevronDownIcon className={`h-4 w-4 opacity-70 transition ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {open ? (
-        <div ref={menuRef} role="listbox" className={menuBase}>
-          {options.map((opt, idx) => {
-            const isSelected = opt.value === value;
-            const isActive = idx === activeIndex;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                onMouseEnter={() => setActiveIndex(idx)}
-                onClick={() => choose(opt.value)}
-                className={`${optionBase} ${isActive ? "bg-black/5 dark:bg-white/10" : ""} ${isSelected ? "font-semibold" : ""}`}
-              >
-                <span className="truncate">{opt.label}</span>
-                {isSelected ? <CheckIcon className="h-4 w-4 text-[#F97316]" /> : <span className="h-4 w-4" />}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
+      {open && menuStyle && typeof document !== "undefined"
+        ? createPortal(
+            <div ref={menuRef} role="listbox" className={menuBase} style={menuStyle}>
+              {options.map((opt, idx) => {
+                const isSelected = opt.value === value;
+                const isActive = idx === activeIndex;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onClick={() => choose(opt.value)}
+                    className={`${optionBase} ${isActive ? "bg-black/5 dark:bg-white/10" : ""} ${isSelected ? "font-semibold" : ""}`}
+                  >
+                    <span className="truncate">{opt.label}</span>
+                    {isSelected ? <CheckIcon className="h-4 w-4 text-[#F97316]" /> : <span className="h-4 w-4" />}
+                  </button>
+                );
+              })}
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }

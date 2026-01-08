@@ -309,7 +309,7 @@ export default function ResultView(props: {
   };
 
   const posterButton =
-    "inline-flex h-10 items-center justify-center rounded-2xl bg-[#F97316] px-4 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(249,115,22,0.25)] transition duration-100 hover:scale-[1.01] hover:bg-[#fb8531] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60";
+    "inline-flex h-11 items-center justify-center rounded-2xl bg-gradient-to-r from-[#F97316] to-[#fb8531] px-5 text-sm font-semibold text-white shadow-[0_12px_40px_rgba(249,115,22,0.32)] ring-1 ring-white/10 transition duration-100 hover:brightness-105 hover:scale-[1.01] active:scale-[0.99] focus:outline-none focus:ring-2 focus:ring-[#F97316]/45 disabled:cursor-not-allowed disabled:opacity-60";
 
   return (
     <motion.section
@@ -392,41 +392,49 @@ export default function ResultView(props: {
       </div>
 
       {tasks.length ? (
-        <div className="rounded-2xl border border-white/12 bg-white/[0.06] p-4 backdrop-blur">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-white/90">{t("daily.title")}</div>
-            <button
-              className="text-xs text-white/65 underline underline-offset-4 hover:text-white/85"
-              onClick={resetTasks}
-            >
-              {t("daily.reset")}
-            </button>
-          </div>
-          <div className="mt-1 text-xs text-white/65">{t("daily.progress", { done: doneCount, total: tasks.length })}</div>
-          <div className="mt-3 space-y-2">
-            {tasks.map((task) => {
-              const checked = !!taskState[task];
-              return (
-                <label key={task} className="flex cursor-pointer items-start gap-2 text-sm text-white/85">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleTask(task)}
-                    className="mt-1 h-4 w-4 accent-[#F97316]"
-                  />
-                  <span className={checked ? "line-through opacity-70" : ""}>{task}</span>
-                </label>
-              );
-            })}
+        <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/20 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_16%,rgba(var(--esa-weather-aura-1),0.12),transparent_60%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_85%_0%,rgba(var(--esa-weather-aura-2),0.22),transparent_55%)]" />
+          <div className="relative">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-white/90">{t("daily.title")}</div>
+              <button
+                className="text-xs text-white/60 underline underline-offset-4 transition hover:text-white/85"
+                onClick={resetTasks}
+              >
+                {t("daily.reset")}
+              </button>
+            </div>
+            <div className="mt-1 text-xs text-white/60">{t("daily.progress", { done: doneCount, total: tasks.length })}</div>
+            <div className="mt-3 space-y-2">
+              {tasks.map((task) => {
+                const checked = !!taskState[task];
+                return (
+                  <label key={task} className="flex cursor-pointer items-start gap-2 text-sm text-white/85">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleTask(task)}
+                      className="mt-1 h-4 w-4 accent-[#F97316]"
+                    />
+                    <span className={checked ? "line-through opacity-70" : ""}>{task}</span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         </div>
       ) : null}
 
-      <div className="flex items-center gap-3">
-        <button className={posterButton} onClick={() => void downloadPoster()} disabled={posterBusy}>
-          {posterBusy ? t("home.loading") : t("actions.downloadPoster")}
-        </button>
-        {copied ? <span className="text-xs text-white/55">{t("result.copied")}</span> : null}
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/20 p-3 shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_18px_60px_rgba(0,0,0,0.35)] backdrop-blur">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_14%_20%,rgba(var(--esa-accent-rgb),0.12),transparent_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_86%_60%,rgba(var(--esa-weather-aura-2),0.18),transparent_60%)]" />
+        <div className="relative flex items-center gap-3">
+          <button className={posterButton} onClick={() => void downloadPoster()} disabled={posterBusy}>
+            {posterBusy ? t("home.loading") : t("actions.downloadPoster")}
+          </button>
+          {copied ? <span className="text-xs text-white/65">{t("result.copied")}</span> : null}
+        </div>
       </div>
     </motion.section>
   );
