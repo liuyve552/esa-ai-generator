@@ -18,6 +18,7 @@ import DebugPanel from "@/components/DebugPanel";
 type Mode = "oracle" | "travel" | "focus" | "calm" | "card";
 type Mood = "happy" | "calm" | "neutral" | "anxious" | "custom";
 type WeatherOverride = "auto" | "clear" | "rain";
+type BgTheme = "purple" | "ocean" | "forest" | "rose";
 
 const MODES: { value: Mode; labelKey: string }[] = [
   { value: "oracle", labelKey: "mode.oracle" },
@@ -40,6 +41,13 @@ const WEATHER: { value: WeatherOverride; labelKey: string }[] = [
   { value: "clear", labelKey: "weather.clear" },
   { value: "rain", labelKey: "weather.rain" }
 ];
+
+function getInitialBgTheme(): BgTheme {
+  if (typeof window === "undefined") return "purple";
+  const stored = window.localStorage.getItem("bgTheme");
+  if (stored === "purple" || stored === "ocean" || stored === "forest" || stored === "rose") return stored;
+  return "purple";
+}
 
 function GlobeLogo({ className }: { className?: string }) {
   return (
@@ -99,6 +107,23 @@ function GearIcon({ className }: { className?: string }) {
         strokeWidth="1.8"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function PaletteIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 3.2a8.8 8.8 0 1 0 0 17.6c1.7 0 2.7-.9 2.7-2 0-.7-.3-1.2-.8-1.8-.3-.4-.5-.7-.5-1.1 0-.8.7-1.5 1.8-1.5h2.2a3 3 0 0 0 3-3.1C20.9 7.2 17.1 3.2 12 3.2Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path d="M8.3 10.2h.01" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" />
+      <path d="M11.2 7.9h.01" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" />
+      <path d="M14.6 10.2h.01" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" />
+      <path d="M10.4 13.3h.01" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" />
     </svg>
   );
 }
@@ -390,6 +415,7 @@ export default function OraclePage() {
   const [weatherOverride, setWeatherOverride] = useState<WeatherOverride>("auto");
   const [prompt, setPrompt] = useState<string>("");
   const [debugOpen, setDebugOpen] = useState<boolean>(false);
+  const [bgTheme, setBgTheme] = useState<BgTheme>("purple");
 
   const [coords, setCoords] = useState<Coords | null>(null);
 
@@ -410,6 +436,17 @@ export default function OraclePage() {
   useEffect(() => {
     void getGeolocationIfGranted().then((c) => setCoords(c));
   }, []);
+
+  useEffect(() => {
+    setBgTheme(getInitialBgTheme());
+  }, []);
+
+  useEffect(() => {
+    // Background theme (user toggle): updates CSS vars used by ParticlesBackdrop.
+    const root = document.documentElement;
+    root.dataset.bg = bgTheme;
+    window.localStorage.setItem("bgTheme", bgTheme);
+  }, [bgTheme]);
 
   useEffect(() => {
     if (!data?.visual?.palette) return;
@@ -571,6 +608,12 @@ export default function OraclePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveLang]);
 
+  const cycleBgTheme = () => {
+    const order: BgTheme[] = ["purple", "ocean", "forest", "rose"];
+    const idx = order.indexOf(bgTheme);
+    setBgTheme(order[(idx + 1) % order.length] ?? "purple");
+  };
+
   return (
     <div className="mx-auto w-full max-w-5xl px-5 pb-16 pt-8 md:px-6 md:pt-10">
       <nav className="flex items-center justify-between gap-4">
@@ -579,8 +622,10 @@ export default function OraclePage() {
             <GlobeLogo className="h-7 w-7" />
           </div>
           <div className="leading-tight">
-            <div className="text-sm font-semibold text-black/90 dark:text-white/90">全球边缘神谕</div>
-            <div className="text-xs text-black/55 dark:text-white/55">打开即用 · 边缘就近 · 可分享海报</div>
+            <div className="text-sm font-semibold text-black/95 drop-shadow-sm dark:text-white">
+              全球边缘神谕
+            </div>
+            <div className="text-xs text-black/70 dark:text-white/70">打开即用 · 边缘就近 · 可分享海报</div>
           </div>
         </div>
 
@@ -594,6 +639,15 @@ export default function OraclePage() {
               options={MODES.map((m) => ({ value: m.value, label: t(m.labelKey) }))}
             />
           </div>
+
+          <button
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-black/10 bg-white/60 px-3 text-xs text-black/80 backdrop-blur transition hover:bg-white/80 dark:border-white/15 dark:bg-[linear-gradient(135deg,rgba(var(--esa-bg-theme-1),0.18),rgba(var(--esa-bg-theme-2),0.10))] dark:text-white/90 dark:hover:bg-[linear-gradient(135deg,rgba(var(--esa-bg-theme-1),0.24),rgba(var(--esa-bg-theme-2),0.14))]"
+            onClick={cycleBgTheme}
+            aria-label="切换背景主题颜色"
+            title="切换背景主题颜色"
+          >
+            <PaletteIcon className="h-5 w-5" />
+          </button>
 
           <button
             className="inline-flex h-9 items-center justify-center rounded-xl border border-black/10 bg-white/60 px-3 text-xs text-black/80 backdrop-blur transition hover:bg-white/80 dark:border-white/15 dark:bg-black/30 dark:text-white/85 dark:hover:bg-black/40"

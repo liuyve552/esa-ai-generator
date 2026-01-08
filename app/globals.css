@@ -14,6 +14,9 @@ body {
   --esa-accent-rgb: 249 115 22;
   --esa-weather-aura-1: var(--esa-accent-rgb);
   --esa-weather-aura-2: 46 16 101;
+  /* Background theme (user toggle) */
+  --esa-bg-theme-1: 46 16 101; /* #2E1065 */
+  --esa-bg-theme-2: 124 58 237; /* #7C3AED */
 }
 
 body {
@@ -28,6 +31,27 @@ html.weather-clear {
 html.weather-cloud {
   --esa-weather-aura-1: 148 163 184;
   --esa-weather-aura-2: 71 85 105;
+}
+
+/* Background theme presets (toggle via html[data-bg]) */
+html[data-bg="purple"] {
+  --esa-bg-theme-1: 46 16 101;
+  --esa-bg-theme-2: 124 58 237;
+}
+
+html[data-bg="ocean"] {
+  --esa-bg-theme-1: 2 132 199; /* sky */
+  --esa-bg-theme-2: 37 99 235; /* blue */
+}
+
+html[data-bg="forest"] {
+  --esa-bg-theme-1: 5 150 105; /* emerald */
+  --esa-bg-theme-2: 16 185 129; /* teal */
+}
+
+html[data-bg="rose"] {
+  --esa-bg-theme-1: 219 39 119; /* fuchsia */
+  --esa-bg-theme-2: 244 63 94; /* rose */
 }
 
 html.dark {
