@@ -80,7 +80,7 @@ export default function DebugPanel({
       <div className="flex items-center justify-between gap-3 border-b border-black/10 px-5 py-4 dark:border-white/10">
         <div className="space-y-0.5">
           <div className="text-xs tracking-widest text-black/60 dark:text-white/60">DEBUG</div>
-          <div className="text-sm font-semibold text-black/90 dark:text-white/90">显示技术细节（可选）</div>
+          <div className="text-sm font-semibold text-black/90 dark:text-white/90">显示技术细节</div>
         </div>
         <button
           className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 bg-white/70 text-black/70 transition hover:bg-white dark:border-white/15 dark:bg-black/30 dark:text-white/80 dark:hover:bg-black/45"
