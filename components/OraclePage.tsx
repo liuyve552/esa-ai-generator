@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { GenerateResponse } from "@/lib/edge/types";
 import ResultView from "@/components/ResultView";
@@ -145,6 +145,174 @@ async function getGeolocationIfGranted(): Promise<Coords | null> {
   } catch {
     return null;
   }
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M6 9l6 6 6-6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M20 6L9 17l-5-5"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+type FancySelectOption<T extends string> = { value: T; label: string };
+
+function FancySelect<T extends string>({
+  value,
+  options,
+  onChange,
+  disabled,
+  size,
+  className,
+  buttonClassName
+}: {
+  value: T;
+  options: FancySelectOption<T>[];
+  onChange: (value: T) => void;
+  disabled?: boolean;
+  size?: "sm" | "md";
+  className?: string;
+  buttonClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const selectedIndex = useMemo(() => options.findIndex((o) => o.value === value), [options, value]);
+  const selected = selectedIndex >= 0 ? options[selectedIndex] : options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0);
+  }, [open, selectedIndex]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (buttonRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  const choose = (next: T) => {
+    onChange(next);
+    setOpen(false);
+    // Restore focus to the trigger for better keyboard UX.
+    queueMicrotask(() => buttonRef.current?.focus());
+  };
+
+  const onTriggerKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return;
+
+    if (!open && (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")) {
+      e.preventDefault();
+      setOpen(true);
+      return;
+    }
+
+    if (!open) return;
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(options.length - 1, Math.max(0, i) + 1));
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(0, Math.max(0, i) - 1));
+      return;
+    }
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const opt = options[activeIndex];
+      if (opt) choose(opt.value);
+    }
+  };
+
+  const sizeClass = size === "sm" ? "h-9 rounded-xl px-3 text-xs" : "h-10 rounded-2xl px-3 text-sm";
+  const buttonBase =
+    "inline-flex w-full items-center justify-between gap-2 border border-black/10 bg-white/70 text-black/85 backdrop-blur transition hover:bg-white/80 focus:outline-none focus:ring-2 focus:ring-[#F97316]/35 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/12 dark:bg-black/30 dark:text-white/90 dark:hover:bg-black/40 dark:focus:ring-[#F97316]/45";
+  const menuBase =
+    "absolute left-0 top-full z-50 mt-2 w-full max-h-72 overflow-auto rounded-2xl border border-black/10 bg-white/85 p-1 shadow-[0_18px_60px_rgba(0,0,0,0.18)] backdrop-blur dark:border-white/12 dark:bg-black/70 dark:shadow-[0_18px_60px_rgba(0,0,0,0.55)]";
+  const optionBase =
+    "flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-sm text-black/90 transition hover:bg-black/5 active:bg-black/10 dark:text-white/90 dark:hover:bg-white/10 dark:active:bg-white/15";
+
+  return (
+    <div className={`relative ${className ?? ""}`}>
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => !disabled && setOpen((v) => !v)}
+        onKeyDown={onTriggerKeyDown}
+        className={`${buttonBase} ${sizeClass} ${buttonClassName ?? ""}`}
+      >
+        <span className="truncate">{selected?.label ?? String(value)}</span>
+        <ChevronDownIcon className={`h-4 w-4 opacity-70 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open ? (
+        <div ref={menuRef} role="listbox" className={menuBase}>
+          {options.map((opt, idx) => {
+            const isSelected = opt.value === value;
+            const isActive = idx === activeIndex;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onMouseEnter={() => setActiveIndex(idx)}
+                onClick={() => choose(opt.value)}
+                className={`${optionBase} ${isActive ? "bg-black/5 dark:bg-white/10" : ""} ${isSelected ? "font-semibold" : ""}`}
+              >
+                <span className="truncate">{opt.label}</span>
+                {isSelected ? <CheckIcon className="h-4 w-4 text-[#F97316]" /> : <span className="h-4 w-4" />}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function OraclePage() {
@@ -352,20 +520,15 @@ export default function OraclePage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="hidden md:block">
+          <div className="hidden md:block w-[152px]">
             <span className="sr-only">{t("home.modeLabel")}</span>
-            <select
+            <FancySelect
+              size="sm"
               value={mode}
-              onChange={(e) => setMode(e.target.value as Mode)}
-              className="h-9 rounded-xl border border-black/10 bg-white/60 px-3 text-xs text-black/80 backdrop-blur focus:border-black/20 dark:border-white/15 dark:bg-black/30 dark:text-white/85"
-            >
-              {MODES.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {t(m.labelKey)}
-                </option>
-              ))}
-            </select>
-          </label>
+              onChange={(v) => setMode(v)}
+              options={MODES.map((m) => ({ value: m.value, label: t(m.labelKey) }))}
+            />
+          </div>
 
           <button
             className="inline-flex h-9 items-center justify-center rounded-xl border border-black/10 bg-white/60 px-3 text-xs text-black/80 backdrop-blur transition hover:bg-white/80 dark:border-white/15 dark:bg-black/30 dark:text-white/85 dark:hover:bg-black/40"
@@ -399,33 +562,21 @@ export default function OraclePage() {
             <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-1">
               <label className="space-y-2">
                 <span className="text-xs text-black/60 dark:text-white/60">{t("home.modeLabel")}</span>
-                <select
+                <FancySelect
                   value={mode}
-                  onChange={(e) => setMode(e.target.value as Mode)}
-                  className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
-                >
-                  {MODES.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {t(m.labelKey)}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setMode(v)}
+                  options={MODES.map((m) => ({ value: m.value, label: t(m.labelKey) }))}
+                />
               </label>
 
               <label className="space-y-2">
                 <span className="text-xs text-black/60 dark:text-white/60">{t("home.moodLabel")}</span>
                 <div className="space-y-2">
-                  <select
+                  <FancySelect
                     value={mood}
-                    onChange={(e) => setMood(e.target.value as Mood)}
-                    className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
-                  >
-                    {MOODS.map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {t(m.labelKey)}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => setMood(v)}
+                    options={MOODS.map((m) => ({ value: m.value, label: t(m.labelKey) }))}
+                  />
 
                   {mood === "custom" ? (
                     <input
@@ -442,17 +593,11 @@ export default function OraclePage() {
 
             <label className="space-y-2">
               <span className="text-xs text-black/60 dark:text-white/60">{t("home.weatherLabel")}</span>
-              <select
+              <FancySelect
                 value={weatherOverride}
-                onChange={(e) => setWeatherOverride(e.target.value as WeatherOverride)}
-                className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
-              >
-                {WEATHER.map((w) => (
-                  <option key={w.value} value={w.value}>
-                    {t(w.labelKey)}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setWeatherOverride(v)}
+                options={WEATHER.map((w) => ({ value: w.value, label: t(w.labelKey) }))}
+              />
             </label>
 
             <button

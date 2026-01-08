@@ -392,17 +392,17 @@ export default function ResultView(props: {
       </div>
 
       {tasks.length ? (
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div className="rounded-2xl border border-white/12 bg-white/[0.06] p-4 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-white/85">{t("daily.title")}</div>
+            <div className="text-sm font-semibold text-white/90">{t("daily.title")}</div>
             <button
-              className="text-xs text-white/55 underline underline-offset-4 hover:text-white/70"
+              className="text-xs text-white/65 underline underline-offset-4 hover:text-white/85"
               onClick={resetTasks}
             >
               {t("daily.reset")}
             </button>
           </div>
-          <div className="mt-1 text-xs text-white/55">{t("daily.progress", { done: doneCount, total: tasks.length })}</div>
+          <div className="mt-1 text-xs text-white/65">{t("daily.progress", { done: doneCount, total: tasks.length })}</div>
           <div className="mt-3 space-y-2">
             {tasks.map((task) => {
               const checked = !!taskState[task];
