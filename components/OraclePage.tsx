@@ -7,7 +7,7 @@ import ResultView from "@/components/ResultView";
 import DebugPanel from "@/components/DebugPanel";
 
 type Mode = "oracle" | "travel" | "focus" | "calm" | "card";
-type Mood = "auto" | "happy" | "anxious";
+type Mood = "happy" | "calm" | "neutral" | "anxious" | "custom";
 type WeatherOverride = "auto" | "clear" | "rain";
 
 const MODES: { value: Mode; labelKey: string }[] = [
@@ -19,9 +19,11 @@ const MODES: { value: Mode; labelKey: string }[] = [
 ];
 
 const MOODS: { value: Mood; labelKey: string }[] = [
-  { value: "auto", labelKey: "mood.auto" },
   { value: "happy", labelKey: "mood.happy" },
-  { value: "anxious", labelKey: "mood.anxious" }
+  { value: "calm", labelKey: "mood.calm" },
+  { value: "neutral", labelKey: "mood.neutral" },
+  { value: "anxious", labelKey: "mood.anxious" },
+  { value: "custom", labelKey: "mood.custom" }
 ];
 
 const WEATHER: { value: WeatherOverride; labelKey: string }[] = [
@@ -140,7 +142,8 @@ export default function OraclePage() {
   const effectiveLang = useEffectiveLang();
 
   const [mode, setMode] = useState<Mode>("oracle");
-  const [mood, setMood] = useState<Mood>("auto");
+  const [mood, setMood] = useState<Mood>("neutral");
+  const [moodText, setMoodText] = useState<string>("");
   const [weatherOverride, setWeatherOverride] = useState<WeatherOverride>("auto");
   const [prompt, setPrompt] = useState<string>("");
   const [debugOpen, setDebugOpen] = useState<boolean>(false);
@@ -178,12 +181,16 @@ export default function OraclePage() {
     setLoading(true);
     setError(null);
 
+    const moodTextValue = mood === "custom" ? moodText.trim() : "";
+    const moodValue = mood === "custom" && !moodTextValue ? "neutral" : mood;
+
     const started = performance.now();
     try {
       const url = new URL("/api/generate", globalThis.location.origin);
       url.searchParams.set("lang", effectiveLang);
       url.searchParams.set("mode", mode);
-      url.searchParams.set("mood", mood);
+      url.searchParams.set("mood", moodValue);
+      if (moodValue === "custom" && moodTextValue) url.searchParams.set("moodText", moodTextValue);
       url.searchParams.set("weather", weatherOverride);
       url.searchParams.set("prompt", prompt.trim());
       if (opts?.auto) url.searchParams.set("auto", "1");
@@ -197,7 +204,8 @@ export default function OraclePage() {
               prompt: prompt.trim(),
               lang: effectiveLang,
               mode,
-              mood,
+              mood: moodValue,
+              moodText: moodValue === "custom" ? moodTextValue : "",
               weather: weatherOverride,
               coords
             })
@@ -266,6 +274,7 @@ export default function OraclePage() {
         <div className="space-y-2">
           <h2 className="text-lg font-semibold text-black/90 dark:text-white/90">{t("home.title")}</h2>
           <p className="text-sm text-black/70 dark:text-white/70">{t("home.subtitle")}</p>
+          <p className="text-sm text-gray-400">{"\u9009\u62e9\u6a21\u5f0f\u5e76\u6dfb\u52a0\u5fc3\u60c5\uff0c\u751f\u6210\u4e13\u5c5e\u795e\u8c15"}</p>
         </div>
 
         <div className="mt-5 grid gap-3 md:grid-cols-[1fr_200px]">
@@ -298,17 +307,29 @@ export default function OraclePage() {
 
               <label className="space-y-2">
                 <span className="text-xs text-black/60 dark:text-white/60">{t("home.moodLabel")}</span>
-                <select
-                  value={mood}
-                  onChange={(e) => setMood(e.target.value as Mood)}
-                  className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
-                >
-                  {MOODS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {t(m.labelKey)}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  <select
+                    value={mood}
+                    onChange={(e) => setMood(e.target.value as Mood)}
+                    className="h-10 w-full rounded-2xl border border-black/10 bg-white/60 px-3 text-sm text-black/85 outline-none focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:focus:border-white/25"
+                  >
+                    {MOODS.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {t(m.labelKey)}
+                      </option>
+                    ))}
+                  </select>
+
+                  {mood === "custom" ? (
+                    <input
+                      value={moodText}
+                      onChange={(e) => setMoodText(e.target.value)}
+                      placeholder={"\u81ea\u5b9a\u4e49\u5fc3\u60c5\uff08\u5982\uff1a\u75b2\u60eb/\u5174\u594b/\u8ff7\u832b...\uff09"}
+                      className="h-10 w-full rounded-2xl border border-black/10 bg-white/70 px-3 text-sm text-black/85 outline-none placeholder:text-black/40 focus:border-black/20 dark:border-white/10 dark:bg-black/30 dark:text-white/90 dark:placeholder:text-white/35 dark:focus:border-white/25"
+                      maxLength={24}
+                    />
+                  ) : null}
+                </div>
               </label>
             </div>
 
@@ -334,8 +355,6 @@ export default function OraclePage() {
             >
               {loading ? t("home.loading") : t("home.generate")}
             </button>
-
-            <div className="text-[11px] text-black/55 dark:text-white/55">{t("home.hint")}</div>
           </div>
         </div>
       </section>

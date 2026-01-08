@@ -44,7 +44,11 @@ export default function WorldMap({
 
   return (
     <MapContainer center={center} zoom={2} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
-      <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+      <TileLayer
+        attribution="&copy; OpenStreetMap contributors"
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        crossOrigin="anonymous"
+      />
 
       <Marker position={center} icon={userIcon}>
         <Popup>{city ? t("map.youAreNear", { city }) : t("map.yourLocation")}</Popup>

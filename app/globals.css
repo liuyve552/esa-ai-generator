@@ -12,10 +12,22 @@ body {
   --esa-fg: #f4f4f5;
   --esa-accent: #f97316;
   --esa-accent-rgb: 249 115 22;
+  --esa-weather-aura-1: var(--esa-accent-rgb);
+  --esa-weather-aura-2: 46 16 101;
 }
 
 body {
   @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-black dark:text-white;
+}
+
+html.weather-clear {
+  --esa-weather-aura-1: 56 189 248;
+  --esa-weather-aura-2: 125 211 252;
+}
+
+html.weather-cloud {
+  --esa-weather-aura-1: 148 163 184;
+  --esa-weather-aura-2: 71 85 105;
 }
 
 html.dark {

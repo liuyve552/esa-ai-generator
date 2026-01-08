@@ -20,7 +20,7 @@ export type WeatherInfo = {
 };
 
 export type GenerateMode = "oracle" | "travel" | "calm" | "focus" | "card";
-export type Mood = "auto" | "happy" | "anxious";
+export type Mood = "auto" | "happy" | "calm" | "neutral" | "anxious" | "tired" | "custom";
 export type WeatherOverride = "auto" | "clear" | "rain";
 
 export type VisualInfo = {
@@ -84,6 +84,7 @@ export type GenerateResponse = {
   lang: string;
   mode?: GenerateMode;
   mood?: Mood;
+  moodText?: string | null;
   weatherOverride?: WeatherOverride;
   location: LocationInfo;
   weather: WeatherInfo;
