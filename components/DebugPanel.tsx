@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import LatencyChart from "@/components/LatencyChart";
 import type { GenerateResponse } from "@/lib/edge/types";
+import type { ResultTechState } from "@/components/ResultView";
 
 function CloseIcon({ className }: { className?: string }) {
   return (
@@ -17,10 +18,12 @@ function CloseIcon({ className }: { className?: string }) {
 export default function DebugPanel({
   data,
   clientApiMs,
+  techState,
   onClose
 }: {
   data: GenerateResponse;
   clientApiMs?: number;
+  techState?: ResultTechState;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -58,6 +61,15 @@ export default function DebugPanel({
     if (typeof km === "number" && Number.isFinite(km)) return isZh ? `${name} · 约${Math.round(km)}km` : `${name} · ~${Math.round(km)}km`;
     return name;
   })();
+
+  const uidShort = (() => {
+    const uid = techState?.uid;
+    if (!uid) return null;
+    if (uid.length <= 12) return uid;
+    return `${uid.slice(0, 6)}…${uid.slice(-4)}`;
+  })();
+
+  const syncLabel = (v: "edge" | "local") => (v === "edge" ? "EdgeKV" : isZh ? "本地" : "local");
 
   const statBars = useMemo(() => {
     if (!data.stats) return null;
@@ -112,6 +124,18 @@ export default function DebugPanel({
             </div>
           </div>
         </div>
+
+        {techState ? (
+          <div className="rounded-2xl border border-black/10 bg-white/70 p-4 dark:border-white/10 dark:bg-black/30">
+            <div className="text-xs text-black/60 dark:text-white/60">User state</div>
+            <div className="mt-1 text-sm font-semibold text-black/90 dark:text-white/90">
+              UID {uidShort ?? "N/A"}
+            </div>
+            <div className="mt-1 text-[11px] text-black/55 dark:text-white/55">
+              Quests: {syncLabel(techState.daily.sync)} · History: {syncLabel(techState.history.sync)} ({techState.history.size})
+            </div>
+          </div>
+        ) : null}
 
         <LatencyChart edgeMs={edgeEndToEndMs} originSimulatedMs={data.timing.originSimulatedMs} />
 

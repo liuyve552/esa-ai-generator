@@ -4,18 +4,6 @@ export type DailyTaskEnvelope = {
   state: Record<string, boolean>;
 };
 
-export type MoodTrackerDay = {
-  mood: string;
-  moodText?: string | null;
-  updatedAt: number;
-};
-
-export type MoodTrackerEnvelope = {
-  v: 1;
-  updatedAt: number;
-  days: Record<string, MoodTrackerDay>;
-};
-
 export type OracleHistoryItem = {
   id: string;
   url: string;
@@ -115,24 +103,6 @@ export function normalizeDailyTaskEnvelope(raw: unknown): DailyTaskEnvelope | nu
   return null;
 }
 
-export function normalizeMoodTrackerEnvelope(raw: unknown): MoodTrackerEnvelope | null {
-  if (!raw || typeof raw !== "object") return null;
-  const any = raw as Record<string, unknown>;
-  if (any.v !== 1 || typeof any.updatedAt !== "number" || !any.days || typeof any.days !== "object") return null;
-
-  const days = any.days as Record<string, unknown>;
-  const outDays: Record<string, MoodTrackerDay> = {};
-  for (const [date, entry] of Object.entries(days)) {
-    if (!entry || typeof entry !== "object") continue;
-    const e = entry as Record<string, unknown>;
-    if (typeof e.mood !== "string") continue;
-    if (typeof e.updatedAt !== "number") continue;
-    outDays[date] = { mood: e.mood, moodText: typeof e.moodText === "string" ? e.moodText : null, updatedAt: e.updatedAt };
-  }
-
-  return { v: 1, updatedAt: any.updatedAt, days: outDays };
-}
-
 export function normalizeHistoryEnvelope(raw: unknown): OracleHistoryEnvelope | null {
   if (!raw || typeof raw !== "object") return null;
   const any = raw as Record<string, unknown>;
@@ -203,31 +173,6 @@ export async function putUserDailyEnvelope(opts: {
         city: opts.city,
         envelope: opts.envelope
       })
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-export async function fetchUserTracker(opts: { uid: string }): Promise<MoodTrackerEnvelope | null> {
-  try {
-    const res = await fetch("/api/user/tracker", { method: "GET", cache: "no-store", headers: { "x-esa-uid": opts.uid } });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { tracker?: unknown };
-    return normalizeMoodTrackerEnvelope(json.tracker ?? null);
-  } catch {
-    return null;
-  }
-}
-
-export async function putUserTracker(opts: { uid: string; tracker: MoodTrackerEnvelope }): Promise<boolean> {
-  try {
-    const res = await fetch("/api/user/tracker", {
-      method: "POST",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", "x-esa-uid": opts.uid },
-      body: JSON.stringify({ tracker: opts.tracker })
     });
     return res.ok;
   } catch {

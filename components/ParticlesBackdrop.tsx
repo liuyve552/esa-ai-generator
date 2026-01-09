@@ -1,13 +1,6 @@
 export default function ParticlesBackdrop() {
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0">
-      {/* Weather FX overlays (controlled by html.weather-*) */}
-      <div className="esa-fx esa-fx-noise" />
-      <div className="esa-fx esa-fx-sun" />
-      <div className="esa-fx esa-fx-rain" />
-      <div className="esa-fx esa-fx-snow" />
-      <div className="esa-fx esa-fx-fog" />
-
       {/* Primary aura (weather-linked via CSS vars set by Oracle output) */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgb(var(--esa-weather-aura-1)/0.20),transparent_60%)]" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_82%_18%,rgb(var(--esa-weather-aura-2)/0.14),transparent_58%)]" />

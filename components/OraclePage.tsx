@@ -12,11 +12,11 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { GenerateResponse } from "@/lib/edge/types";
-import ResultView from "@/components/ResultView";
+import ResultView, { type ResultTechState } from "@/components/ResultView";
 import DebugPanel from "@/components/DebugPanel";
 
 type Mode = "oracle" | "travel" | "focus" | "calm" | "card";
-type Mood = "auto" | "happy" | "calm" | "neutral" | "anxious" | "tired" | "custom";
+type Mood = "happy" | "calm" | "neutral" | "anxious" | "custom";
 type WeatherOverride = "auto" | "clear" | "rain";
 type BgTheme = "purple" | "ocean" | "forest" | "rose";
 
@@ -29,12 +29,10 @@ const MODES: { value: Mode; labelKey: string }[] = [
 ];
 
 const MOODS: { value: Mood; labelKey: string }[] = [
-  { value: "auto", labelKey: "mood.auto" },
   { value: "happy", labelKey: "mood.happy" },
   { value: "calm", labelKey: "mood.calm" },
   { value: "neutral", labelKey: "mood.neutral" },
   { value: "anxious", labelKey: "mood.anxious" },
-  { value: "tired", labelKey: "mood.tired" },
   { value: "custom", labelKey: "mood.custom" }
 ];
 
@@ -49,18 +47,6 @@ function getInitialBgTheme(): BgTheme {
   const stored = window.localStorage.getItem("bgTheme");
   if (stored === "purple" || stored === "ocean" || stored === "forest" || stored === "rose") return stored;
   return "purple";
-}
-
-function isMode(v: string): v is Mode {
-  return v === "oracle" || v === "travel" || v === "focus" || v === "calm" || v === "card";
-}
-
-function isMood(v: string): v is Mood {
-  return v === "auto" || v === "happy" || v === "calm" || v === "neutral" || v === "anxious" || v === "tired" || v === "custom";
-}
-
-function isWeatherOverride(v: string): v is WeatherOverride {
-  return v === "auto" || v === "clear" || v === "rain";
 }
 
 function GlobeLogo({ className }: { className?: string }) {
@@ -430,8 +416,6 @@ export default function OraclePage() {
   const [prompt, setPrompt] = useState<string>("");
   const [debugOpen, setDebugOpen] = useState<boolean>(false);
   const [bgTheme, setBgTheme] = useState<BgTheme>("purple");
-  const [bootstrapped, setBootstrapped] = useState<boolean>(false);
-  const [challenge, setChallenge] = useState<boolean>(false);
 
   const [coords, setCoords] = useState<Coords | null>(null);
 
@@ -440,6 +424,7 @@ export default function OraclePage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState<boolean>(false);
+  const [techState, setTechState] = useState<ResultTechState | null>(null);
 
   const lastReq = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -451,37 +436,6 @@ export default function OraclePage() {
 
   useEffect(() => {
     void getGeolocationIfGranted().then((c) => setCoords(c));
-  }, []);
-
-  useEffect(() => {
-    try {
-      const sp = new URLSearchParams(globalThis.location?.search ?? "");
-      const qLang = (sp.get("lang") ?? "").trim();
-      if (qLang) void i18n.changeLanguage(qLang);
-
-      const qMode = (sp.get("mode") ?? "").trim();
-      if (qMode && isMode(qMode)) setMode(qMode);
-
-      const qMood = (sp.get("mood") ?? "").trim();
-      if (qMood && isMood(qMood)) setMood(qMood);
-
-      const qMoodText = (sp.get("moodText") ?? "").trim();
-      if (qMood === "custom") setMoodText(qMoodText);
-
-      const qWeather = (sp.get("weather") ?? "").trim();
-      if (qWeather && isWeatherOverride(qWeather)) setWeatherOverride(qWeather);
-
-      const qPrompt = (sp.get("prompt") ?? "").trim();
-      if (qPrompt) setPrompt(qPrompt.slice(0, 80));
-
-      const qChallenge = (sp.get("challenge") ?? "").trim();
-      setChallenge(qChallenge === "1" || qChallenge.toLowerCase() === "true");
-    } catch {
-      // ignore
-    } finally {
-      setBootstrapped(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -651,10 +605,9 @@ export default function OraclePage() {
   };
 
   useEffect(() => {
-    if (!bootstrapped) return;
     void generate({ auto: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bootstrapped, effectiveLang]);
+  }, [effectiveLang]);
 
   const cycleBgTheme = () => {
     const order: BgTheme[] = ["purple", "ocean", "forest", "rose"];
@@ -706,24 +659,6 @@ export default function OraclePage() {
           </button>
         </div>
       </nav>
-
-      {challenge ? (
-        <div className="mt-6 rounded-3xl border border-black/10 bg-white/55 p-4 backdrop-blur dark:border-white/10 dark:bg-black/25">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-black/85 dark:text-white/90">{t("challenge.title")}</div>
-              <div className="mt-1 text-xs text-black/60 dark:text-white/60">{t("challenge.desc")}</div>
-            </div>
-            <button
-              type="button"
-              className="shrink-0 rounded-2xl bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
-              onClick={() => setChallenge(false)}
-            >
-              {t("challenge.dismiss")}
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <section className="mt-7 rounded-3xl border border-black/10 bg-white/55 p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.04),0_18px_60px_rgba(0,0,0,0.10)] backdrop-blur dark:border-white/10 dark:bg-black/25 dark:shadow-glow">
         <div className="space-y-2">
@@ -790,7 +725,7 @@ export default function OraclePage() {
               disabled={loading}
               className="h-10 w-full rounded-2xl bg-[#F97316] px-4 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(249,115,22,0.25)] transition duration-100 hover:scale-[1.01] hover:bg-[#fb8531] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? t("home.loadingMystic") : t("home.generate")}
+              {loading ? t("home.loading") : t("home.generate")}
             </button>
           </div>
         </div>
@@ -802,28 +737,10 @@ export default function OraclePage() {
         ) : null}
 
         {data ? (
-         <ResultView data={data} clientApiMs={clientApiMs ?? undefined} streaming={streaming} />
+          <ResultView data={data} clientApiMs={clientApiMs ?? undefined} streaming={streaming} onTechState={setTechState} />
         ) : (
           <div className="rounded-3xl border border-black/10 bg-white/45 p-6 backdrop-blur dark:border-white/10 dark:bg-black/20">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 h-10 w-10 rounded-2xl bg-[radial-gradient(circle_at_30%_30%,rgba(var(--esa-weather-aura-1),0.45),transparent_65%)] ring-1 ring-black/10 dark:ring-white/10" />
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-black/85 dark:text-white/90">
-                  {loading ? (
-                    <>
-                      {t("home.loadingMystic")}
-                      <span className="esa-loading-dots" aria-hidden />
-                    </>
-                  ) : (
-                    t("home.demoTitle")
-                  )}
-                </div>
-                <div className="mt-1 text-xs text-black/60 dark:text-white/60">
-                  {loading ? t("home.loadingMysticHint") : t("home.demoDesc")}
-                </div>
-              </div>
-            </div>
-
+            <div className="h-5 w-44 animate-pulse rounded bg-black/10 dark:bg-white/10" />
             <div className="mt-4 space-y-2">
               <div className="h-4 w-full animate-pulse rounded bg-black/10 dark:bg-white/10" />
               <div className="h-4 w-5/6 animate-pulse rounded bg-black/10 dark:bg-white/10" />
@@ -834,7 +751,12 @@ export default function OraclePage() {
       </section>
 
       {debugOpen && data ? (
-        <DebugPanel data={data} clientApiMs={clientApiMs ?? undefined} onClose={() => setDebugOpen(false)} />
+        <DebugPanel
+          data={data}
+          clientApiMs={clientApiMs ?? undefined}
+          techState={techState ?? undefined}
+          onClose={() => setDebugOpen(false)}
+        />
       ) : null}
     </div>
   );

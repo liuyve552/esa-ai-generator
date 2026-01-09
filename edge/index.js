@@ -4,7 +4,7 @@
 const DEFAULT_TTL_MS = 8 * 60 * 1000;
 // Multi-level KV cache TTL (86400s). Refreshes daily by design (kv.txt).
 const GEN_TTL_MS = 24 * 60 * 60 * 1000;
-// User state TTL (>= 7 days): daily quests + 7-day mood tracker + history.
+// User state TTL (>= 7 days): daily quests + oracle history.
 const USER_TTL_MS = 9 * 24 * 60 * 60 * 1000;
 // KV bindings (kv.txt):
 // - ESA: uses global EdgeKV({ namespace: KV_NAMESPACE })
@@ -302,10 +302,6 @@ function userDailyKey({ uid, date, mode, city }) {
   return `user_daily_${uid}_${dateKey}_${modeKey}_${cityKey}`;
 }
 
-function userTrackerKey(uid) {
-  return `user_tracker_${uid}`;
-}
-
 function userHistoryKey(uid) {
   return `user_history_${uid}`;
 }
@@ -324,29 +320,6 @@ function sanitizeDailyEnvelope(envelope) {
   if (typeof envelope.updatedAt !== "number") return null;
   if (!isRecordBoolean(envelope.state)) return null;
   return { v: 1, updatedAt: envelope.updatedAt, state: envelope.state };
-}
-
-function sanitizeTrackerEnvelope(tracker) {
-  if (!isPlainObject(tracker)) return null;
-  if (tracker.v !== 1) return null;
-  if (typeof tracker.updatedAt !== "number") return null;
-  if (!isPlainObject(tracker.days)) return null;
-
-  const keys = Object.keys(tracker.days).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort().slice(-14);
-  const days = {};
-  for (const k of keys) {
-    const e = tracker.days[k];
-    if (!isPlainObject(e)) continue;
-    if (typeof e.mood !== "string") continue;
-    if (typeof e.updatedAt !== "number") continue;
-    days[k] = {
-      mood: e.mood,
-      moodText: typeof e.moodText === "string" ? e.moodText.slice(0, 24) : null,
-      updatedAt: e.updatedAt
-    };
-  }
-
-  return { v: 1, updatedAt: tracker.updatedAt, days };
 }
 
 function sanitizeHistoryItem(item) {
@@ -1888,7 +1861,7 @@ async function handleViews(id, request) {
 // -----------------------------
 // User state (EdgeKV, TTL>=7d)
 // - Daily quests: /api/user/daily
-// - Mood tracker: /api/user/tracker
+// - Oracle history: /api/user/history
 // -----------------------------
 async function handleUserDaily(request, env) {
   const uid = normalizeUidFromRequest(request);
@@ -1917,30 +1890,6 @@ async function handleUserDaily(request, env) {
 
     const key = userDailyKey({ uid, date, mode, city });
     await kvPutPayload(kv, key, envelope, USER_TTL_MS);
-    return json({ ok: true });
-  }
-
-  return json({ error: "Method not allowed" }, { status: 405 });
-}
-
-async function handleUserTracker(request, env) {
-  const uid = normalizeUidFromRequest(request);
-  if (!uid) return json({ error: "Missing uid" }, { status: 400 });
-
-  const kv = getGenKv(env);
-  if (!kv) return json({ error: "KV not enabled" }, { status: 501 });
-
-  const key = userTrackerKey(uid);
-  if (request.method === "GET") {
-    const tracker = await kvGetValidPayload(kv, key);
-    return json({ tracker: tracker || null });
-  }
-
-  if (request.method === "POST") {
-    const body = await request.json().catch(() => null);
-    const tracker = sanitizeTrackerEnvelope(body?.tracker);
-    if (!tracker) return json({ error: "Bad request" }, { status: 400 });
-    await kvPutPayload(kv, key, tracker, USER_TTL_MS);
     return json({ ok: true });
   }
 
@@ -1992,7 +1941,6 @@ async function routeFetch(request, env) {
   if (url.pathname === "/api/replay") return handleReplay(request);
   if (url.pathname === "/api/share") return handleShare(request);
   if (url.pathname === "/api/user/daily") return handleUserDaily(request, env);
-  if (url.pathname === "/api/user/tracker") return handleUserTracker(request, env);
   if (url.pathname === "/api/user/history") return handleUserHistory(request, env);
 
   const parts = url.pathname.split("/").filter(Boolean);

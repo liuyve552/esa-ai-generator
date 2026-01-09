@@ -124,7 +124,7 @@ export default function ResultPageClient() {
       {error ? (
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-sm text-red-100">{error}</div>
       ) : null}
-      {data ? <ResultView data={data} clientApiMs={clientApiMs ?? undefined} /> : null}
+      {data ? <ResultView data={data} sharedId={id || undefined} clientApiMs={clientApiMs ?? undefined} /> : null}
     </>
   );
 }
