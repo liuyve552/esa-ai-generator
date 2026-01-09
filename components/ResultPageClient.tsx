@@ -10,9 +10,14 @@ export default function ResultPageClient() {
   const sp = useSearchParams();
   const { t, i18n } = useTranslation();
 
+  const id = useMemo(() => (sp.get("id") ?? "").trim(), [sp]);
+  const d = useMemo(() => (sp.get("d") ?? "").trim(), [sp]);
   const prompt = useMemo(() => (sp.get("prompt") ?? "").trim(), [sp]);
   const lang = useMemo(() => (sp.get("lang") ?? "zh").trim() || "zh", [sp]);
   const mode = useMemo(() => (sp.get("mode") ?? "oracle").trim() || "oracle", [sp]);
+  const mood = useMemo(() => (sp.get("mood") ?? "").trim(), [sp]);
+  const moodText = useMemo(() => (sp.get("moodText") ?? "").trim(), [sp]);
+  const weather = useMemo(() => (sp.get("weather") ?? "").trim(), [sp]);
 
   const [data, setData] = useState<GenerateResponse | null>(null);
   const [clientApiMs, setClientApiMs] = useState<number | null>(null);
@@ -35,23 +40,63 @@ export default function ResultPageClient() {
     setError(null);
     setLoading(true);
 
-    const url = new URL("/api/generate", globalThis.location.origin);
-    url.searchParams.set("prompt", prompt);
-    url.searchParams.set("lang", lang);
-    url.searchParams.set("mode", mode);
-
     const ac = new AbortController();
     const t0 = performance.now();
 
-    fetch(url, { cache: "no-store", signal: ac.signal })
-      .then(async (res) => {
+    const incView = (shareId: string) =>
+      fetch(`/api/view/${encodeURIComponent(shareId)}`, { method: "POST", cache: "no-store", signal: ac.signal }).catch(
+        () => null
+      );
+
+    const load = async () => {
+      // Share/replay first: /result can act as a share landing (EdgeKV-backed).
+      if (id || d) {
+        if (id) {
+          void incView(id);
+
+          const qs = new URLSearchParams();
+          qs.set("id", id);
+          if (d) qs.set("d", d);
+
+          const res = await fetch(`/api/share?${qs.toString()}`, { cache: "no-store", signal: ac.signal });
+          if (res.ok) {
+            const json = (await res.json()) as GenerateResponse;
+            setClientApiMs(Math.round(performance.now() - t0));
+            setData(json);
+            return;
+          }
+
+          if (res.status !== 404 || !d) throw new Error(await res.text());
+        }
+
+        if (!d) throw new Error(t("errors.missingSharePayload"));
+        const res = await fetch(`/api/replay?d=${encodeURIComponent(d)}`, { cache: "no-store", signal: ac.signal });
         if (!res.ok) throw new Error(await res.text());
-        return (await res.json()) as GenerateResponse;
-      })
-      .then((json) => {
+        const json = (await res.json()) as GenerateResponse;
+        if (json.share?.id) void incView(json.share.id);
+
         setClientApiMs(Math.round(performance.now() - t0));
         setData(json);
-      })
+        return;
+      }
+
+      // Otherwise: regenerate by query params (still cacheable on Edge).
+      const url = new URL("/api/generate", globalThis.location.origin);
+      url.searchParams.set("prompt", prompt);
+      url.searchParams.set("lang", lang);
+      url.searchParams.set("mode", mode);
+      if (mood) url.searchParams.set("mood", mood);
+      if (moodText) url.searchParams.set("moodText", moodText);
+      if (weather) url.searchParams.set("weather", weather);
+
+      const res = await fetch(url, { cache: "no-store", signal: ac.signal });
+      if (!res.ok) throw new Error(await res.text());
+      const json = (await res.json()) as GenerateResponse;
+      setClientApiMs(Math.round(performance.now() - t0));
+      setData(json);
+    };
+
+    void load()
       .catch((e) => {
         if (ac.signal.aborted) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -59,7 +104,7 @@ export default function ResultPageClient() {
       .finally(() => setLoading(false));
 
     return () => ac.abort();
-  }, [prompt, lang, mode]);
+  }, [d, id, lang, mode, mood, moodText, prompt, t, weather]);
 
   if (loading && !data && !error) {
     return (

@@ -4,6 +4,8 @@
 const DEFAULT_TTL_MS = 8 * 60 * 1000;
 // Multi-level KV cache TTL (86400s). Refreshes daily by design (kv.txt).
 const GEN_TTL_MS = 24 * 60 * 60 * 1000;
+// User state TTL (>= 7 days): daily quests + 7-day mood tracker + history.
+const USER_TTL_MS = 9 * 24 * 60 * 60 * 1000;
 // KV bindings (kv.txt):
 // - ESA: uses global EdgeKV({ namespace: KV_NAMESPACE })
 // - Cloudflare/Workers: bind a KV namespace to env.GEN_KV
@@ -274,6 +276,105 @@ function base64UrlDecodeUtf8(b64url) {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new TextDecoder().decode(bytes);
+}
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function normalizeUidFromRequest(request) {
+  const h = request.headers;
+  const raw = (h.get("x-esa-uid") || h.get("x-user-id") || "").trim();
+  if (!raw) return null;
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(raw)) return null;
+  return raw;
+}
+
+function normalizeDateKey(date) {
+  const v = String(date || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+
+function userDailyKey({ uid, date, mode, city }) {
+  const dateKey = normalizeDateKey(date) || "unknown";
+  const modeKey = normalizeMode(mode);
+  const cityKey = base64UrlEncodeUtf8(String(city || "unknown").slice(0, 64));
+  return `user_daily_${uid}_${dateKey}_${modeKey}_${cityKey}`;
+}
+
+function userTrackerKey(uid) {
+  return `user_tracker_${uid}`;
+}
+
+function userHistoryKey(uid) {
+  return `user_history_${uid}`;
+}
+
+function isRecordBoolean(v) {
+  if (!isPlainObject(v)) return false;
+  for (const val of Object.values(v)) {
+    if (typeof val !== "boolean") return false;
+  }
+  return true;
+}
+
+function sanitizeDailyEnvelope(envelope) {
+  if (!isPlainObject(envelope)) return null;
+  if (envelope.v !== 1) return null;
+  if (typeof envelope.updatedAt !== "number") return null;
+  if (!isRecordBoolean(envelope.state)) return null;
+  return { v: 1, updatedAt: envelope.updatedAt, state: envelope.state };
+}
+
+function sanitizeTrackerEnvelope(tracker) {
+  if (!isPlainObject(tracker)) return null;
+  if (tracker.v !== 1) return null;
+  if (typeof tracker.updatedAt !== "number") return null;
+  if (!isPlainObject(tracker.days)) return null;
+
+  const keys = Object.keys(tracker.days).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort().slice(-14);
+  const days = {};
+  for (const k of keys) {
+    const e = tracker.days[k];
+    if (!isPlainObject(e)) continue;
+    if (typeof e.mood !== "string") continue;
+    if (typeof e.updatedAt !== "number") continue;
+    days[k] = {
+      mood: e.mood,
+      moodText: typeof e.moodText === "string" ? e.moodText.slice(0, 24) : null,
+      updatedAt: e.updatedAt
+    };
+  }
+
+  return { v: 1, updatedAt: tracker.updatedAt, days };
+}
+
+function sanitizeHistoryItem(item) {
+  if (!isPlainObject(item)) return null;
+  const id = typeof item.id === "string" ? item.id.trim().slice(0, 96) : "";
+  const url = typeof item.url === "string" ? item.url.trim().slice(0, 512) : "";
+  if (!id || !url) return null;
+
+  const at = typeof item.at === "number" && Number.isFinite(item.at) ? item.at : Date.now();
+  const date = normalizeDateKey(item.date) || (new Date(at).toISOString().slice(0, 10));
+  const mode = normalizeMode(item.mode);
+  const place = coerceString(item.place, "").slice(0, 96);
+  const weather = coerceString(item.weather, "").slice(0, 96);
+  const shareLine = typeof item.shareLine === "string" ? item.shareLine.slice(0, 140) : null;
+
+  return { id, url, at, date, mode, place, weather, shareLine };
+}
+
+function sanitizeHistoryEnvelope(history) {
+  if (!isPlainObject(history)) return { v: 1, updatedAt: 0, items: [] };
+  const itemsIn = Array.isArray(history.items) ? history.items : [];
+  const items = [];
+  for (const it of itemsIn) {
+    const clean = sanitizeHistoryItem(it);
+    if (clean) items.push(clean);
+  }
+  items.sort((a, b) => (b.at || 0) - (a.at || 0));
+  return { v: 1, updatedAt: typeof history.updatedAt === "number" ? history.updatedAt : 0, items: items.slice(0, 12) };
 }
 
 function coerceString(v, fallback = "") {
@@ -1784,6 +1885,97 @@ async function handleViews(id, request) {
   return json({ id, count });
 }
 
+// -----------------------------
+// User state (EdgeKV, TTL>=7d)
+// - Daily quests: /api/user/daily
+// - Mood tracker: /api/user/tracker
+// -----------------------------
+async function handleUserDaily(request, env) {
+  const uid = normalizeUidFromRequest(request);
+  if (!uid) return json({ error: "Missing uid" }, { status: 400 });
+
+  const kv = getGenKv(env);
+  if (!kv) return json({ error: "KV not enabled" }, { status: 501 });
+
+  const url = new URL(request.url);
+  if (request.method === "GET") {
+    const date = (url.searchParams.get("date") || "").trim();
+    const mode = (url.searchParams.get("mode") || "oracle").trim();
+    const city = (url.searchParams.get("city") || "unknown").trim();
+    const key = userDailyKey({ uid, date, mode, city });
+    const envelope = await kvGetValidPayload(kv, key);
+    return json({ envelope: envelope || null });
+  }
+
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => null);
+    const date = normalizeDateKey(body?.date);
+    const mode = coerceString(body?.mode, "oracle");
+    const city = coerceString(body?.city, "unknown");
+    const envelope = sanitizeDailyEnvelope(body?.envelope);
+    if (!date || !envelope) return json({ error: "Bad request" }, { status: 400 });
+
+    const key = userDailyKey({ uid, date, mode, city });
+    await kvPutPayload(kv, key, envelope, USER_TTL_MS);
+    return json({ ok: true });
+  }
+
+  return json({ error: "Method not allowed" }, { status: 405 });
+}
+
+async function handleUserTracker(request, env) {
+  const uid = normalizeUidFromRequest(request);
+  if (!uid) return json({ error: "Missing uid" }, { status: 400 });
+
+  const kv = getGenKv(env);
+  if (!kv) return json({ error: "KV not enabled" }, { status: 501 });
+
+  const key = userTrackerKey(uid);
+  if (request.method === "GET") {
+    const tracker = await kvGetValidPayload(kv, key);
+    return json({ tracker: tracker || null });
+  }
+
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => null);
+    const tracker = sanitizeTrackerEnvelope(body?.tracker);
+    if (!tracker) return json({ error: "Bad request" }, { status: 400 });
+    await kvPutPayload(kv, key, tracker, USER_TTL_MS);
+    return json({ ok: true });
+  }
+
+  return json({ error: "Method not allowed" }, { status: 405 });
+}
+
+async function handleUserHistory(request, env) {
+  const uid = normalizeUidFromRequest(request);
+  if (!uid) return json({ error: "Missing uid" }, { status: 400 });
+
+  const kv = getGenKv(env);
+  if (!kv) return json({ error: "KV not enabled" }, { status: 501 });
+
+  const key = userHistoryKey(uid);
+  if (request.method === "GET") {
+    const history = await kvGetValidPayload(kv, key);
+    return json({ history: history || null });
+  }
+
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => null);
+    const item = sanitizeHistoryItem(body?.item);
+    if (!item) return json({ error: "Bad request" }, { status: 400 });
+
+    const prevPayload = await kvGetValidPayload(kv, key);
+    const prev = sanitizeHistoryEnvelope(prevPayload);
+    const nextItems = [item, ...prev.items.filter((x) => x && x.id !== item.id)].slice(0, 12);
+    const next = { v: 1, updatedAt: Date.now(), items: nextItems };
+    await kvPutPayload(kv, key, next, USER_TTL_MS);
+    return json({ ok: true, size: nextItems.length });
+  }
+
+  return json({ error: "Method not allowed" }, { status: 405 });
+}
+
 function notFound() {
   return json({ error: "Not found" }, { status: 404 });
 }
@@ -1799,6 +1991,9 @@ async function routeFetch(request, env) {
   if (url.pathname === "/api/generate") return handleGenerate(request, env);
   if (url.pathname === "/api/replay") return handleReplay(request);
   if (url.pathname === "/api/share") return handleShare(request);
+  if (url.pathname === "/api/user/daily") return handleUserDaily(request, env);
+  if (url.pathname === "/api/user/tracker") return handleUserTracker(request, env);
+  if (url.pathname === "/api/user/history") return handleUserHistory(request, env);
 
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts[1] === "share" && parts.length === 3 && request.method === "GET") return handleShareById(parts[2], request);
