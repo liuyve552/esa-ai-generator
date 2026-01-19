@@ -45,6 +45,8 @@ export type DailyInfo = {
 export type StatsInfo = {
   todayGlobal: number;
   todayCity: number;
+  todayMode?: number;
+  source?: "edgekv" | "simulated";
 };
 
 export type EdgePopInfo = {

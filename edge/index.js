@@ -521,7 +521,7 @@ async function incrementView(id, ttlMs) {
   return next;
 }
 
-async function replayFromD(d, request) {
+async function replayFromD(d, request, env) {
   const spec = decodeShareDataFromUrl(d);
   if (!spec) return json({ error: "Invalid share payload" }, { status: 400 });
 
@@ -545,7 +545,7 @@ async function replayFromD(d, request) {
   const daily = makeDaily({ mode: spec.mode, mood, moodText, lang: spec.lang, location, weather: spec.weather, palette });
   const visualSeed = `${daily.seed}|${spec.prompt}`;
   const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
-  const stats = makeStats({ lang: spec.lang, location, weather: spec.weather, mode: spec.mode });
+  const stats = await makeStats({ lang: spec.lang, location, weather: spec.weather, mode: spec.mode, env });
 
   const dateSlice = daily.date || localDateKey(spec.weather);
   const key = await genCacheKey({
@@ -1049,14 +1049,202 @@ function makeDaily({ mode, mood, moodText, lang, location, weather, palette }) {
   return { date, title, tasks: uniqTasks, luckyColor, luckyNumber, shareLine, seed };
 }
 
-function makeStats({ lang, location, weather, mode }) {
+// -----------------------------
+// Rate Limiting (EdgeKV-based)
+// - Protects edge endpoints from abuse
+// - IP-based throttling with configurable limits
+// - Demonstrates edge security capabilities
+// -----------------------------
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
+const RATE_LIMIT_MAX_REQUESTS = 30; // max 30 requests per minute per IP
+
+function getRateLimitKey(ip) {
+  const now = Date.now();
+  const windowStart = Math.floor(now / RATE_LIMIT_WINDOW_MS);
+  return `rate_limit_${ip}_${windowStart}`;
+}
+
+async function checkRateLimit(request, env) {
+  const h = request.headers;
+  const ip = firstIp(h.get("x-forwarded-for")) || h.get("true-client-ip") || "unknown";
+
+  // Allow unknown IPs (development, local testing)
+  if (ip === "unknown") return { allowed: true, limit: RATE_LIMIT_MAX_REQUESTS, remaining: RATE_LIMIT_MAX_REQUESTS, resetMs: RATE_LIMIT_WINDOW_MS };
+
+  const kv = getGenKv(env);
+  if (!kv) return { allowed: true, limit: RATE_LIMIT_MAX_REQUESTS, remaining: RATE_LIMIT_MAX_REQUESTS, resetMs: RATE_LIMIT_WINDOW_MS };
+
+  const key = getRateLimitKey(ip);
+  const now = Date.now();
+
+  try {
+    const current = await kvGetJson(kv, key);
+    const count = (current?.count ?? 0) + 1;
+
+    // Update counter
+    const expiresAt = now + RATE_LIMIT_WINDOW_MS;
+    await kvPutJson(kv, key, { count, expiresAt });
+
+    const allowed = count <= RATE_LIMIT_MAX_REQUESTS;
+    const remaining = Math.max(0, RATE_LIMIT_MAX_REQUESTS - count);
+
+    return {
+      allowed,
+      limit: RATE_LIMIT_MAX_REQUESTS,
+      remaining,
+      resetMs: RATE_LIMIT_WINDOW_MS,
+      count
+    };
+  } catch {
+    // On error, allow request (fail open)
+    return { allowed: true, limit: RATE_LIMIT_MAX_REQUESTS, remaining: RATE_LIMIT_MAX_REQUESTS, resetMs: RATE_LIMIT_WINDOW_MS };
+  }
+}
+
+function rateLimitResponse(rateLimit) {
+  return json(
+    {
+      error: "Too many requests",
+      message: "Rate limit exceeded. Please try again later.",
+      limit: rateLimit.limit,
+      remaining: 0,
+      resetIn: Math.ceil(rateLimit.resetMs / 1000)
+    },
+    {
+      status: 429,
+      headers: {
+        "X-RateLimit-Limit": String(rateLimit.limit),
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": String(Math.ceil((Date.now() + rateLimit.resetMs) / 1000)),
+        "Retry-After": String(Math.ceil(rateLimit.resetMs / 1000))
+      }
+    }
+  );
+}
+
+// -----------------------------
+// Global Stats (EdgeKV, real-time)
+// - Tracks usage by city, mode, and date
+// - Provides social proof and engagement metrics
+// -----------------------------
+function statsGlobalKey(date) {
+  return `stats_global_${date}`;
+}
+
+function statsCityKey(city, date) {
+  const cityKey = normalizeCityKey(city);
+  return `stats_city_${cityKey}_${date}`;
+}
+
+function statsModeKey(mode, date) {
+  return `stats_mode_${normalizeMode(mode)}_${date}`;
+}
+
+async function incrementStats({ city, mode, date, env }) {
+  const kv = getGenKv(env);
+  if (!kv) return;
+
+  const now = Date.now();
+  const ttl = 48 * 60 * 60 * 1000; // 48h TTL for stats
+
+  // Increment global count
+  try {
+    const globalKey = statsGlobalKey(date);
+    const current = await kvGetJson(kv, globalKey);
+    const count = (current?.count ?? 0) + 1;
+    await kvPutJson(kv, globalKey, { count, expiresAt: now + ttl });
+  } catch {
+    // ignore
+  }
+
+  // Increment city count
+  if (city) {
+    try {
+      const cityKey = statsCityKey(city, date);
+      const current = await kvGetJson(kv, cityKey);
+      const count = (current?.count ?? 0) + 1;
+      await kvPutJson(kv, cityKey, { count, expiresAt: now + ttl });
+    } catch {
+      // ignore
+    }
+  }
+
+  // Increment mode count
+  try {
+    const modeKey = statsModeKey(mode, date);
+    const current = await kvGetJson(kv, modeKey);
+    const count = (current?.count ?? 0) + 1;
+    await kvPutJson(kv, modeKey, { count, expiresAt: now + ttl });
+  } catch {
+    // ignore
+  }
+}
+
+async function getStatsData({ city, mode, date, env }) {
+  const kv = getGenKv(env);
+  if (!kv) return null;
+
+  const now = Date.now();
+  let globalCount = 0;
+  let cityCount = 0;
+  let modeCount = 0;
+
+  try {
+    const globalData = await kvGetJson(kv, statsGlobalKey(date));
+    if (globalData && (!globalData.expiresAt || globalData.expiresAt > now)) {
+      globalCount = globalData.count ?? 0;
+    }
+  } catch {
+    // ignore
+  }
+
+  if (city) {
+    try {
+      const cityData = await kvGetJson(kv, statsCityKey(city, date));
+      if (cityData && (!cityData.expiresAt || cityData.expiresAt > now)) {
+        cityCount = cityData.count ?? 0;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const modeData = await kvGetJson(kv, statsModeKey(mode, date));
+    if (modeData && (!modeData.expiresAt || modeData.expiresAt > now)) {
+      modeCount = modeData.count ?? 0;
+    }
+  } catch {
+    // ignore
+  }
+
+  return { globalCount, cityCount, modeCount };
+}
+
+async function makeStats({ lang, location, weather, mode, env }) {
   const city = location?.city || (isZhLang(lang) ? "本地" : "local");
   const date = localDateKey(weather);
+
+  // Try to get real stats from EdgeKV
+  const realStats = await getStatsData({ city, mode, date, env });
+
+  if (realStats && (realStats.globalCount > 0 || realStats.cityCount > 0)) {
+    return {
+      todayGlobal: realStats.globalCount,
+      todayCity: realStats.cityCount,
+      todayMode: realStats.modeCount,
+      source: "edgekv"
+    };
+  }
+
+  // Fallback to simulated stats for demo
   const seed = `${date}|${normalizeMode(mode)}|${city}`;
   const rnd = mulberry32(hash32(seed));
   return {
     todayGlobal: 6800 + Math.floor(rnd() * 5200),
-    todayCity: 180 + Math.floor(rnd() * 1200)
+    todayCity: 180 + Math.floor(rnd() * 1200),
+    todayMode: 120 + Math.floor(rnd() * 800),
+    source: "simulated"
   };
 }
 
@@ -1326,6 +1514,12 @@ function envGet(env, name) {
 }
 
 async function handleGenerate(request, env) {
+  // Rate limiting check (edge security)
+  const rateLimit = await checkRateLimit(request, env);
+  if (!rateLimit.allowed) {
+    return rateLimitResponse(rateLimit);
+  }
+
   const url = new URL(request.url);
   const wantsStream = (url.searchParams.get("stream") || "").trim() === "1";
 
@@ -1362,12 +1556,12 @@ async function handleGenerate(request, env) {
   const apiKey = envGet(env, "DASHSCOPE_API_KEY");
   const model = envGet(env, "AI_TEXT_MODEL") || "qwen-max";
 
-  const buildDerived = ({ location, weather }) => {
+  const buildDerived = async ({ location, weather }) => {
     const palette = pickPalette({ mode, weatherCode: weather.weatherCode, isDay: weather.isDay });
     const daily = makeDaily({ mode, mood, moodText, lang, location, weather, palette });
     const visualSeed = `${daily.seed}|${prompt}`;
     const visual = { seed: visualSeed, palette, svg: makeSigilSvg(visualSeed, palette) };
-    const stats = makeStats({ lang, location, weather, mode });
+    const stats = await makeStats({ lang, location, weather, mode, env });
     return { daily, visual, stats };
   };
 
@@ -1614,6 +1808,10 @@ async function handleGenerate(request, env) {
           genMemPut(key, final, GEN_TTL_MS);
           if (kv) await kvPutPayload(kv, key, final, GEN_TTL_MS);
 
+          // Record stats (fire and forget, non-blocking)
+          const dateSlice = localDateKey(weather);
+          incrementStats({ city: location.city, mode, date: dateSlice, env }).catch(() => {});
+
           send({ type: "done", data: final });
         };
 
@@ -1800,17 +1998,20 @@ async function handleGenerate(request, env) {
   genMemPut(key, final, GEN_TTL_MS);
   if (kv) await kvPutPayload(kv, key, final, GEN_TTL_MS);
 
+  // Record stats (fire and forget, non-blocking)
+  incrementStats({ city: location.city, mode, date: dateSlice, env }).catch(() => {});
+
   return json(final);
 }
 
-async function handleReplay(request) {
+async function handleReplay(request, env) {
   const url = new URL(request.url);
   const d = (url.searchParams.get("d") || "").trim();
   if (!d) return json({ error: "Missing d" }, { status: 400 });
-  return replayFromD(d, request);
+  return replayFromD(d, request, env);
 }
 
-async function handleShare(request) {
+async function handleShare(request, env) {
   const url = new URL(request.url);
 
   if (request.method === "POST") {
@@ -1829,19 +2030,19 @@ async function handleShare(request) {
   if (res) return json(res);
 
   const d = (url.searchParams.get("d") || "").trim();
-  if (d) return replayFromD(d, request);
+  if (d) return replayFromD(d, request, env);
 
   return json({ error: "Not found" }, { status: 404 });
 }
 
-async function handleShareById(id, request) {
+async function handleShareById(id, request, env) {
   if (!id) return json({ error: "Missing id" }, { status: 400 });
   const res = await getShare(id);
   if (res) return json(res);
 
   const url = new URL(request.url);
   const d = (url.searchParams.get("d") || "").trim();
-  if (d) return replayFromD(d, request);
+  if (d) return replayFromD(d, request, env);
 
   return json({ error: "Not found" }, { status: 404 });
 }
@@ -1856,6 +2057,55 @@ async function handleViews(id, request) {
 
   const count = await getViewCount(id);
   return json({ id, count });
+}
+
+// -----------------------------
+// User Preferences (EdgeKV, TTL>=30d)
+// - Stores user preferences like language, default mode, theme
+// - Syncs across all edge nodes globally
+// - Demonstrates EdgeKV as distributed config store
+// -----------------------------
+function userPrefsKey(uid) {
+  return `user_prefs_${uid}`;
+}
+
+function sanitizeUserPrefs(prefs) {
+  if (!isPlainObject(prefs)) return null;
+  return {
+    lang: typeof prefs.lang === "string" ? normalizeLang(prefs.lang) : "zh",
+    mode: typeof prefs.mode === "string" ? normalizeMode(prefs.mode) : "oracle",
+    mood: typeof prefs.mood === "string" ? normalizeMood(prefs.mood) : "auto",
+    theme: typeof prefs.theme === "string" && ["light", "dark", "auto"].includes(prefs.theme) ? prefs.theme : "auto",
+    updatedAt: typeof prefs.updatedAt === "number" ? prefs.updatedAt : Date.now()
+  };
+}
+
+async function handleUserPrefs(request, env) {
+  const uid = normalizeUidFromRequest(request);
+  if (!uid) return json({ error: "Missing uid" }, { status: 400 });
+
+  const kv = getGenKv(env);
+  if (!kv) return json({ error: "KV not enabled" }, { status: 501 });
+
+  const key = userPrefsKey(uid);
+  const ttl = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+  if (request.method === "GET") {
+    const prefs = await kvGetValidPayload(kv, key);
+    return json({ prefs: prefs || null });
+  }
+
+  if (request.method === "POST" || request.method === "PUT") {
+    const body = await request.json().catch(() => null);
+    const sanitized = sanitizeUserPrefs(body);
+    if (!sanitized) return json({ error: "Bad request" }, { status: 400 });
+
+    sanitized.updatedAt = Date.now();
+    await kvPutPayload(kv, key, sanitized, ttl);
+    return json({ ok: true, prefs: sanitized });
+  }
+
+  return json({ error: "Method not allowed" }, { status: 405 });
 }
 
 // -----------------------------
@@ -1938,13 +2188,14 @@ async function routeFetch(request, env) {
   }
 
   if (url.pathname === "/api/generate") return handleGenerate(request, env);
-  if (url.pathname === "/api/replay") return handleReplay(request);
-  if (url.pathname === "/api/share") return handleShare(request);
+  if (url.pathname === "/api/replay") return handleReplay(request, env);
+  if (url.pathname === "/api/share") return handleShare(request, env);
+  if (url.pathname === "/api/user/prefs") return handleUserPrefs(request, env);
   if (url.pathname === "/api/user/daily") return handleUserDaily(request, env);
   if (url.pathname === "/api/user/history") return handleUserHistory(request, env);
 
   const parts = url.pathname.split("/").filter(Boolean);
-  if (parts[1] === "share" && parts.length === 3 && request.method === "GET") return handleShareById(parts[2], request);
+  if (parts[1] === "share" && parts.length === 3 && request.method === "GET") return handleShareById(parts[2], request, env);
   if (parts[1] === "view" && parts.length === 3 && (request.method === "GET" || request.method === "POST")) {
     return handleViews(parts[2], request);
   }

@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import LatencyChart from "@/components/LatencyChart";
+import PerformanceComparison from "@/components/PerformanceComparison";
 import type { GenerateResponse } from "@/lib/edge/types";
 import type { ResultTechState } from "@/components/ResultView";
 
@@ -73,10 +73,11 @@ export default function DebugPanel({
 
   const statBars = useMemo(() => {
     if (!data.stats) return null;
-    const max = Math.max(1, data.stats.todayGlobal, data.stats.todayCity);
+    const max = Math.max(1, data.stats.todayGlobal, data.stats.todayCity, data.stats.todayMode ?? 0);
     return {
       globalW: Math.max(8, Math.round((data.stats.todayGlobal / max) * 100)),
-      cityW: Math.max(8, Math.round((data.stats.todayCity / max) * 100))
+      cityW: Math.max(8, Math.round((data.stats.todayCity / max) * 100)),
+      modeW: data.stats.todayMode ? Math.max(8, Math.round((data.stats.todayMode / max) * 100)) : 0
     };
   }, [data.stats]);
 
@@ -137,7 +138,12 @@ export default function DebugPanel({
           </div>
         ) : null}
 
-        <LatencyChart edgeMs={edgeEndToEndMs} originSimulatedMs={data.timing.originSimulatedMs} />
+        <PerformanceComparison
+          edgeMs={edgeEndToEndMs}
+          originSimulatedMs={data.timing.originSimulatedMs}
+          cacheHit={data.cache.hit}
+          cacheLayer={data.cache.layer}
+        />
 
         <div className="rounded-2xl border border-black/10 bg-white/70 p-4 dark:border-white/10 dark:bg-black/30">
           <div className="text-xs text-black/60 dark:text-white/60">Timing</div>
@@ -159,7 +165,14 @@ export default function DebugPanel({
 
         {data.stats && statBars ? (
           <div className="rounded-2xl border border-black/10 bg-white/70 p-4 dark:border-white/10 dark:bg-black/30">
-            <div className="text-xs text-black/60 dark:text-white/60">{t("stats.title")}</div>
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-xs text-black/60 dark:text-white/60">{t("stats.title")}</div>
+              {data.stats.source === "edgekv" && (
+                <div className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[9px] font-medium text-emerald-700 dark:text-emerald-400">
+                  EdgeKV
+                </div>
+              )}
+            </div>
             <div className="mt-3 space-y-2">
               <div>
                 <div className="mb-1 text-[11px] text-black/65 dark:text-white/65">
@@ -177,6 +190,16 @@ export default function DebugPanel({
                   <div className="h-2 rounded-full bg-[#a78bfa]" style={{ width: `${statBars.cityW}%` }} />
                 </div>
               </div>
+              {data.stats.todayMode != null && statBars.modeW > 0 && (
+                <div>
+                  <div className="mb-1 text-[11px] text-black/65 dark:text-white/65">
+                    {t("stats.mode", { mode: data.mode, count: data.stats.todayMode })}
+                  </div>
+                  <div className="h-2 rounded-full bg-black/10 dark:bg-white/10">
+                    <div className="h-2 rounded-full bg-[#60a5fa]" style={{ width: `${statBars.modeW}%` }} />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ) : null}
