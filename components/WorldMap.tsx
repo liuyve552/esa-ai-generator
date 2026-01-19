@@ -3,8 +3,18 @@
 import { MapContainer, TileLayer, Marker, Popup, CircleMarker } from "react-leaflet";
 import type { LatLngExpression } from "leaflet";
 import L from "leaflet";
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+
+// Fix Leaflet default icon path for Next.js static export
+if (typeof window !== "undefined") {
+  delete (L.Icon.Default.prototype as any)._getIconUrl;
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png"
+  });
+}
 
 const userIcon = L.divIcon({
   className: "user-pin",
