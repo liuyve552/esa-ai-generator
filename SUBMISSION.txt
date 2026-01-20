@@ -6,11 +6,18 @@ GitHub 公共仓库地址：https://github.com/liuyve552/esa-ai-generator
 官方声明（必须）：
 本项目由阿里云 ESA 提供加速、计算和保护。
 
-（同项目重复提交）本次优化点（2026-01-08）：
-- 多级 KV 缓存：L1 内存 Map（0ms）→ L2 ESA EdgeKV（TTL=86400s，每日刷新）→ L3 实时生成；输出卡直接展示“缓存命中：内存/KV/实时生成（xxms）”
-- Edge Functions Streaming：边缘原生 Response Streaming（NDJSON），前端逐 token 实时更新文本区，首 token 更快、体感更丝滑；流结束后写回 KV/内存
-- 全球节点展示：优先 Request.cf.colo / x-esa-node 获取 POP，映射城市并粗算距离；输出卡展示“由[城市]节点提供服务 · 距离约Xkm · 边缘延迟Yms”
-- UI/UX 收尾：统一玻璃拟态卡片风格（任务/下载海报），自绘下拉组件避免原生样式割裂，新增背景主题色切换按钮
+（同项目重复提交）本次优化点（2026-01-20）：
+- EdgeKV 应用场景深化（从 2 个扩展到 7 个）：新增全局实时统计（全球/城市/模式维度，TTL=48h）、边缘速率限制（IP-based 30次/分钟，EdgeKV 作为分布式计数器）、用户偏好存储（语言/模式/主题，TTL=30天，全球节点同步）
+- 性能可视化增强：新增 PerformanceComparison 组件（边缘延迟 vs 中心化延迟对比，节省时间/成本可视化）、CacheHitDashboard 组件（L1内存/L2EdgeKV/L3生成三级缓存架构展示）
+- API 端点扩展：新增 /api/user/prefs（GET/POST 用户偏好管理）、/api/stats/global|city|mode（实时统计查询，EdgeKV 数据源）
+- 首屏性能优化：Amap 地图服务预连接（DNS+TCP提前建立，节省 200-500ms）、OraclePage 组件懒加载（首屏 JS 体积减少）、Leaflet/Framer Motion 异步分割（延迟加载约 250KB），预期首屏加载时间减少 30-50%
+- 地图显示优化：切换到高德地图（Amap）瓦片服务（国内稳定），调整初始缩放级别（zoom=4，区域视图直接可见）
+
+（同项目重复提交）上次优化点（2026-01-10）：
+- 用户态持久化（≥7 天）：新增 /api/user/daily、/api/user/history 写入 EdgeKV（TTL≈9天）；匿名 UID（localStorage）标识用户，localStorage 兜底
+- /result 复测增强：/result 支持 id/d 分享落地，优先 /api/share（EdgeKV）读取，404 自动 fallback /api/replay?d=...；打开时上报 /api/view/{id} 浏览量
+- 数据安全写入：对 daily envelope / history item 做 schema sanitize（字段规校验 + 截断），历史去重并限制最多 12 条，避免脏数据污染 KV
+- 可观测与一致性：ResultView 上报 UID/同步来源（EdgeKV or local）与历史条数到 DebugPanel；/result 再生成补齐 mood/moodText/weather 参数确保输出一致
 
 一句话简介：
 把「定位 → 天气 → 生成（AI/模板）→ 缓存 → 分享」全链路搬到阿里云 ESA 边缘节点，做成“打开即生成、可打卡、可导出海报、可复测”的病毒式边缘应用。
