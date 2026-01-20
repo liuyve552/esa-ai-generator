@@ -58,6 +58,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://webrd03.is.autonavi.com" />
         <link rel="preconnect" href="https://webrd04.is.autonavi.com" />
         <link rel="dns-prefetch" href="https://unpkg.com" />
+        {/* PWA Support */}
+        <link rel="apple-touch-icon" href="/icon.svg" />
+        <link rel="canonical" href="https://esa-ai-generator.7d7df28e.er.aliyun-esa.net" />
       </head>
       <body>
         <Providers>{children}</Providers>
