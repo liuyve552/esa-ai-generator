@@ -66,6 +66,21 @@ function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("Content-Type", "application/json; charset=utf-8");
   headers.set("Cache-Control", "no-store");
+
+  // 安全响应头
+  if (!headers.has("X-Content-Type-Options")) {
+    headers.set("X-Content-Type-Options", "nosniff");
+  }
+  if (!headers.has("X-Frame-Options")) {
+    headers.set("X-Frame-Options", "DENY");
+  }
+  if (!headers.has("X-XSS-Protection")) {
+    headers.set("X-XSS-Protection", "1; mode=block");
+  }
+  if (!headers.has("Referrer-Policy")) {
+    headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  }
+
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
