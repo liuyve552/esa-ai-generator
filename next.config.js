@@ -11,11 +11,15 @@ const nextConfig = {
   compiler: {
     removeConsole: process.env.NODE_ENV === "production"
   },
+  // Compress output
+  compress: true,
   // Optimize chunking
   webpack: (config, { isServer }) => {
     if (!isServer) {
+      // Minimize output
       config.optimization = {
         ...config.optimization,
+        minimize: true,
         splitChunks: {
           chunks: "all",
           cacheGroups: {
@@ -29,11 +33,11 @@ const nextConfig = {
               priority: 40,
               enforce: true
             },
-            // Leaflet and map libraries
+            // Leaflet and map libraries (only load on result page)
             leaflet: {
               name: "leaflet",
               test: /[\\/]node_modules[\\/](leaflet|react-leaflet)[\\/]/,
-              chunks: "all",
+              chunks: "async",
               priority: 30
             },
             // i18n libraries
@@ -42,6 +46,13 @@ const nextConfig = {
               test: /[\\/]node_modules[\\/](i18next|react-i18next)[\\/]/,
               chunks: "all",
               priority: 25
+            },
+            // Framer Motion (heavy animation library)
+            motion: {
+              name: "motion",
+              test: /[\\/]node_modules[\\/]framer-motion[\\/]/,
+              chunks: "async",
+              priority: 28
             },
             // Other vendor libraries
             lib: {
