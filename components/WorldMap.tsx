@@ -54,12 +54,12 @@ export default function WorldMap({
 
   return (
     <MapContainer center={center} zoom={2} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
-      {/* 使用 CartoDB 瓦片服务（国内访问更稳定） */}
+      {/* 使用高德地图瓦片服务（国内最稳定） */}
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-        subdomains={["a", "b", "c", "d"]}
-        maxZoom={20}
+        attribution='&copy; <a href="https://www.amap.com/">高德地图</a>'
+        url="https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
+        subdomains={["1", "2", "3", "4"]}
+        maxZoom={18}
       />
 
       <Marker position={center} icon={userIcon}>
