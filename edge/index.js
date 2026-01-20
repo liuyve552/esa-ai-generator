@@ -1809,7 +1809,6 @@ async function handleGenerate(request, env) {
           if (kv) await kvPutPayload(kv, key, final, GEN_TTL_MS);
 
           // Record stats (fire and forget, non-blocking)
-          const dateSlice = localDateKey(weather);
           incrementStats({ city: location.city, mode, date: dateSlice, env }).catch(() => {});
 
           send({ type: "done", data: final });
