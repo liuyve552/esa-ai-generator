@@ -53,13 +53,14 @@ export default function WorldMap({
   );
 
   return (
-    <MapContainer center={center} zoom={2} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
+    <MapContainer center={center} zoom={4} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
       {/* 使用高德地图瓦片服务（国内最稳定） */}
       <TileLayer
         attribution='&copy; <a href="https://www.amap.com/">高德地图</a>'
         url="https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
         subdomains={["1", "2", "3", "4"]}
         maxZoom={18}
+        minZoom={1}
       />
 
       <Marker position={center} icon={userIcon}>
